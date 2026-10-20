@@ -1,0 +1,16 @@
+#!/bin/sh
+# post-commit - Consume the sum-up once a commit carries the issue
+#
+# Stamps 'issue: <n>' into every plan the issue was filed from and deletes
+# docs/plans/sumup.md: from here on the issue is where that work is written
+# down. Does nothing unless the commit just made really starts with the number
+# of the pending issue, so a commit made with --no-verify leaves the issue for
+# the next one.
+
+PREL_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+if [ -x "$PREL_DIR/scripts/issue-from-plans.sh" ]; then
+	"$PREL_DIR/scripts/issue-from-plans.sh" stamp || true
+fi
+
+exit 0

@@ -1,22 +1,39 @@
 #!/bin/sh
-# prepare-commit-msg - Git hook to append Co-Authored-By trailer to commit messages
+# prepare-commit-msg - Git hook preparing the commit message, in two steps
 #
-# This hook adds a Co-Authored-By trailer to commit messages when commit.coauthor
-# is configured. It is skipped for merge commits since they already carry
-# proper attribution from their original creation.
+# 1. 'prel issue-from-plans' files the completed work plans of the repository
+#    as a GitHub issue and writes their sum-up as the message, when
+#    docs/plans/sumup.md asks for it. The issue number itself is added by the
+#    commit-msg hook: git strips comment lines, and a '#12' subject written
+#    here would be one of them.
 #
-# The trailer value is read from the commit.coauthor git configuration setting.
+# 2. A Co-Authored-By trailer is appended when commit.coauthor is configured,
+#    the setting 'prel switch-author' maintains.
+#
+# Both steps are skipped for merge commits: those already carry the attribution
+# of their original creation, and a merge is not this repository's own work to
+# file.
 
 msg="$1"
 source="$2"
 
-# Skip for merge commits - these already carry proper attribution
+PREL_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+# Skip for merge commits
 case "$source" in
 	merge)
 		exit 0
 		;;
 esac
 
+# Step 1 - file the completed plans. Never allowed to stop a commit: the script
+# reports what it could not do on stderr and leaves the message alone.
+if [ -x "$PREL_DIR/scripts/issue-from-plans.sh" ]; then
+	"$PREL_DIR/scripts/issue-from-plans.sh" prepare-msg "$@" || true
+fi
+
+# Step 2 - Co-Authored-By trailer
+#
 # Get co-author from git config
 # If not set or empty, silently exit - allows hook to work in repos without
 # co-author configuration

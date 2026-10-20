@@ -1,0 +1,18 @@
+#!/bin/sh
+# commit-msg - Put the issue number of the filed plans in front of the subject
+#
+# This runs after git has cleaned the message up, which is the point: comment
+# lines are already gone, so a subject starting with '#12' survives here where
+# it would have been stripped had prepare-commit-msg written it.
+#
+# The number comes from .git/prel-pending-issue, written by the
+# 'prel issue-from-plans' step of prepare-commit-msg. No pending issue, a
+# subject that already carries one, or an empty message: nothing is changed.
+
+PREL_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+if [ -x "$PREL_DIR/scripts/issue-from-plans.sh" ]; then
+	"$PREL_DIR/scripts/issue-from-plans.sh" subject "$1" || true
+fi
+
+exit 0

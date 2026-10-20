@@ -27,6 +27,13 @@ Usage:
 Description:
   Registers the prel hooks directory with the current git repository.
   The hooks are stored in the prel project and will be used for all commits.
+
+  Registering also sets commit.cleanup to scissors, which is what lets a
+  commit subject start with the '#12' of the issue 'prel issue-from-plans'
+  files: git cleans the message up after the hooks have run, and its default
+  mode drops every line starting with the comment character. Under scissors
+  only what sits below the scissors line is dropped, so the help text still
+  goes and the subject stays. Unregistering puts the setting back.
 EOF
 		return 0
 	fi
@@ -65,6 +72,12 @@ EOF
 			else
 				echo "Hooks already registered from: $source_dir"
 			fi
+
+			# Keep a '#12' subject out of git's comment stripping - see usage.
+			if [ "$(git config --get commit.cleanup 2>/dev/null)" != "scissors" ]; then
+				git config --local commit.cleanup scissors
+				echo "Set commit.cleanup=scissors (so an issue number can lead the subject)"
+			fi
 			;;
 		unregister)
 			local current_hooks=$(git config --get core.hooksPath 2>/dev/null || true)
@@ -73,6 +86,11 @@ EOF
 				echo "Unregistered hooks (was: $current_hooks)"
 			else
 				echo "No hooks currently registered"
+			fi
+
+			if [ "$(git config --local --get commit.cleanup 2>/dev/null)" = "scissors" ]; then
+				git config --local --unset commit.cleanup
+				echo "Unset commit.cleanup (was: scissors)"
 			fi
 			;;
 		*)

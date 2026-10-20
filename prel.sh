@@ -22,6 +22,12 @@ if [ -z "$REPO_ROOT" ] && [ "${1-}" != "usage" ] && [ -n "${1-}" ]; then
 	exit 1
 fi
 
+# Remember where prel was called from, before moving to the repo root: a command
+# taking paths needs it to read them relative to the caller's directory, the way
+# every git command does.
+PREL_PWD="$PWD"
+export PREL_PWD
+
 # Change to repo root if we're in one
 if [ -n "$REPO_ROOT" ]; then
 	cd "$REPO_ROOT"
