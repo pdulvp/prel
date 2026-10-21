@@ -557,3 +557,8 @@ Those three registrations are independent, and the issue filing needs all of
 them, so `prel init` runs them together and `prel init status` reports them
 together - a repository missing one looks exactly like a repository where the
 hooks simply had nothing to do.
+
+## License
+
+MIT - see [LICENSE](LICENSE). The package installs it as
+`/usr/share/doc/prel/copyright`, where Debian policy puts it.

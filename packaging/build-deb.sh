@@ -129,6 +129,10 @@ main() {
 
 	cp -a README.md "$stage/usr/share/doc/${PKG_NAME}/"
 
+	# Named 'copyright' rather than 'LICENSE': Debian policy puts the licence
+	# of a package at that exact path, and tools look for it there.
+	cp -a LICENSE "$stage/usr/share/doc/${PKG_NAME}/copyright"
+
 	# The package sets its own modes instead of inheriting the clone's. Files
 	# here are group-writable and some are mode 770, which installed
 	# root-owned under /usr/share would leave /usr/share/prel/prel.sh
