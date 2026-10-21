@@ -41,6 +41,42 @@ _rel_artifacts_spec() {
 	git config --get prel.artifacts 2>/dev/null || true
 }
 
+# Fill in the placeholders a prel.artifacts pattern may carry: ${version} is
+# the version being released and ${tag} the tag it gets, braced or bare. Plain
+# string replacement rather than eval - a pattern becomes a filename, and must
+# not be able to run a command on the way to becoming one. The braced forms go
+# first, though neither spelling can eat into the other.
+_rel_substitute_artifact_vars() {
+	local pattern="$1" version="$2" tag="$3"
+	pattern=${pattern//'${version}'/$version}
+	pattern=${pattern//'${tag}'/$tag}
+	pattern=${pattern//'$version'/$version}
+	pattern=${pattern//'$tag'/$tag}
+	printf '%s\n' "$pattern"
+}
+
+# Said of an unmatched pattern that still holds a '$': the name in it is not
+# one of the two that get filled in, which is nearly always a misspelling.
+# Written to stderr, where the unmatched patterns themselves are reported.
+_rel_placeholder_hint() {
+	local indent="$1" pattern
+	shift
+	for pattern in "$@"; do
+		case "$pattern" in
+			*'$'*)
+				echo "${indent}a \$ left in a pattern is a name that was not filled in;"
+				echo "${indent}prel.artifacts knows \${version} and \${tag} only"
+				return 0
+				;;
+		esac
+	done
+}
+
+# The three numbers a VERSION file is for, the pre-release suffix allowed.
+_rel_is_version() {
+	[[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+}
+
 _rel_remote() {
 	local remote
 	if git remote get-url origin >/dev/null 2>&1; then
@@ -100,13 +136,20 @@ _rel_notes() {
 # any pattern did. Only regular files count: a pattern matching a directory
 # alone has not found the file it was written for.
 #
+# Each pattern has its placeholders filled in before it is expanded, so a spec
+# can name the release it is for instead of globbing over every release ever
+# built. _REL_RESOLVED comes back holding "pattern -> resolved" for the ones
+# that changed, which is what the dry run shows.
+#
 # An unmatched pattern is the failure worth stopping on. It is how a release
 # ends up published without the Windows zip nobody noticed was missing.
 _rel_expand_artifacts() {
-	local spec="$1" pattern candidate nullglob_was_set
+	local spec="$1" version="$2" tag="$3"
+	local pattern resolved candidate nullglob_was_set
 	local -a patterns matches
 	_REL_ASSETS=()
 	_REL_MISSING=()
+	_REL_RESOLVED=()
 
 	# Split the list first, and with 'read' rather than word splitting, so that
 	# nullglob below cannot make a pattern matching nothing disappear before it
@@ -116,13 +159,15 @@ _rel_expand_artifacts() {
 	shopt -q nullglob && nullglob_was_set=1 || nullglob_was_set=0
 	shopt -s nullglob
 	for pattern in "${patterns[@]}"; do
+		resolved=$(_rel_substitute_artifact_vars "$pattern" "$version" "$tag")
+		[ "$resolved" = "$pattern" ] || _REL_RESOLVED+=("$pattern -> $resolved")
 		matches=()
 		# Unquoted on purpose: this is the pathname expansion being asked for.
-		for candidate in $pattern; do
+		for candidate in $resolved; do
 			[ -f "$candidate" ] && matches+=("$candidate")
 		done
 		if [ ${#matches[@]} -eq 0 ]; then
-			_REL_MISSING+=("$pattern")
+			_REL_MISSING+=("$resolved")
 		else
 			_REL_ASSETS+=("${matches[@]}")
 		fi
@@ -169,6 +214,112 @@ _rel_undo_and_report() {
 	rm -f "$backup"
 }
 
+# 'prel release artifacts': what prel.artifacts matches as the tree stands,
+# and nothing besides. None of the release preconditions are checked here -
+# the question is about files on disk, so answering it must not want a free
+# tag, a remote, or a usable gh. Non-zero where a pattern matched nothing, so
+# a build script can gate on it.
+_rel_check_artifacts() {
+	local version="" origin="" repo_root version_file spec tag build_command
+	local rc=0
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-*)
+				echo "Error: Unknown option '$1' for release artifacts" >&2
+				echo "Try: prel release usage" >&2
+				return 1
+				;;
+			*)
+				if [ -n "$version" ]; then
+					echo "Error: one version at a time, got '$version' and '$1'" >&2
+					return 1
+				fi
+				version="$1"
+				;;
+		esac
+		shift
+	done
+
+	repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+	if [ -z "$repo_root" ]; then
+		echo "Error: Not in a git repository" >&2
+		return 1
+	fi
+	cd "$repo_root" || return 1
+
+	# The patterns first: with none set, the version they would have been
+	# filled in with is beside the point, and so is a missing version file.
+	spec=$(_rel_artifacts_spec)
+	if [ -z "$spec" ]; then
+		echo "prel.artifacts is not set: a release here is the tag and nothing else."
+		echo 'Set it with, say:  git config prel.artifacts '"'"'build/myapp-${version}.deb'"'"
+		return 0
+	fi
+
+	if [ -n "$version" ]; then
+		if ! _rel_is_version "$version"; then
+			echo "Error: '$version' is not a version of three numbers (1.0.1, 1.0.1-rc1)" >&2
+			return 1
+		fi
+		origin="given"
+	else
+		# What the file reads now stands in for the release about to be made.
+		# Taken as it reads, not checked: this command reports, and a version
+		# worth refusing is refused by the release itself.
+		version_file=$(_rel_version_file)
+		if [ ! -f "$version_file" ]; then
+			echo "Error: no $version_file in $repo_root to take the version from" >&2
+			echo "       pass one, as in 'prel release artifacts 1.0.1'" >&2
+			return 1
+		fi
+		version=$(tr -d '[:space:]' < "$version_file")
+		if [ -z "$version" ]; then
+			echo "Error: $version_file is empty, so there is no version to fill in" >&2
+			echo "       pass one, as in 'prel release artifacts 1.0.1'" >&2
+			return 1
+		fi
+		origin="from $version_file"
+	fi
+
+	tag="$(_rel_tag_prefix)$version"
+	echo "artifacts: $spec"
+	echo "version:   $version ($origin)"
+	echo "tag:       $tag"
+	echo ""
+
+	_rel_expand_artifacts "$spec" "$version" "$tag"
+	rc=$?
+
+	if [ ${#_REL_RESOLVED[@]} -gt 0 ]; then
+		echo "filled in:"
+		printf '  %s\n' "${_REL_RESOLVED[@]}"
+	fi
+	if [ ${#_REL_ASSETS[@]} -gt 0 ]; then
+		echo "would upload:"
+		printf '  %s\n' "${_REL_ASSETS[@]}"
+	fi
+	if [ ${#_REL_MISSING[@]} -gt 0 ]; then
+		echo "matched nothing:"
+		printf '  %s\n' "${_REL_MISSING[@]}"
+		_rel_placeholder_hint '  ' "${_REL_MISSING[@]}"
+		# The usual reason, and the one this command cannot tell apart from a
+		# wrong pattern: the build that writes those files has not run.
+		build_command=$(_rel_build_command)
+		if [ -n "$build_command" ]; then
+			echo "  a release would build them first: $build_command"
+		fi
+	fi
+
+	echo ""
+	if [ "$rc" = "0" ]; then
+		echo "${#_REL_ASSETS[@]} file(s) would go up with the release"
+	else
+		echo "${#_REL_MISSING[@]} pattern(s) matched nothing; a release would stop before the push"
+	fi
+	return $rc
+}
+
 release() {
 	local version="" message="" dry_run=0 assume_yes=0 publish=1 draft=0
 	local no_build=0 no_assets=0
@@ -179,6 +330,8 @@ release - Move the VERSION file on, tag it, push it and publish the release
 
 Usage:
   prel release usage              Show this help
+  prel release artifacts          Say what prel.artifacts matches, do nothing
+  prel release artifacts <x.y.z>  The same, for a version not yet in the file
   prel release <x.y.z>            Bump, commit, tag, push, publish
   prel release <x.y.z> -n         Show every step, change nothing
   prel release <x.y.z> -y         Do not ask about uncommitted changes
@@ -209,6 +362,17 @@ Description:
     git config prel.buildCommand "cmake --build build --target release"
     git config prel.artifacts "build/*.deb build-win/*.zip"
 
+  'prel release artifacts' answers what those patterns match, without any of
+  the above: no network, no gh, nothing written, nothing built. The version
+  comes from the version file as it stands, or from the argument. It exits
+  non-zero where a pattern matched no file, so a build script can gate on it.
+
+  A pattern in prel.artifacts can name the release it is for rather than glob
+  over every release ever built: \${version} is the version and \${tag} the tag,
+  as in 'build/myapp-\${version}.deb'. Single-quote it when setting it, so the
+  shell leaves the name for prel to fill in. prel.buildCommand is a shell
+  command and sees the same two as \$version and \$tag.
+
   The build runs before the push, while the commit and the tag are still only
   local. A build that fails there undoes both and leaves nothing published,
   rather than a public tag whose release holds no files. The release is created
@@ -234,6 +398,13 @@ Description:
   sum-up that 'prel issue-from-plans' is holding for the next real commit.
 EOF
 		return 0
+	fi
+
+	# Not a release at all: the artifact patterns, looked at and nothing more.
+	if [ "${1-}" = "artifacts" ]; then
+		shift
+		_rel_check_artifacts "$@"
+		return $?
 	fi
 
 	while [ $# -gt 0 ]; do
@@ -273,9 +444,8 @@ EOF
 		return 1
 	fi
 
-	# Semantic versioning, with the pre-release suffix allowed: the three
-	# numbers are what a VERSION file is for, and a typo here becomes a tag.
-	if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+	# A typo here becomes a tag, so it is worth refusing.
+	if ! _rel_is_version "$version"; then
 		echo "Error: '$version' is not a version of three numbers (1.0.1, 1.0.1-rc1)" >&2
 		return 1
 	fi
@@ -422,7 +592,11 @@ EOF
 		echo "$version"
 		if [ "$assets" = "1" ]; then
 			echo "--- artifacts ----------------------------------------------------------"
-			_rel_expand_artifacts "$artifacts_spec"
+			_rel_expand_artifacts "$artifacts_spec" "$version" "$tag"
+			if [ ${#_REL_RESOLVED[@]} -gt 0 ]; then
+				echo "filled in:"
+				printf '  %s\n' "${_REL_RESOLVED[@]}"
+			fi
 			[ ${#_REL_ASSETS[@]} -gt 0 ] && printf '%s\n' "${_REL_ASSETS[@]}"
 			[ ${#_REL_MISSING[@]} -gt 0 ] \
 				&& printf '%s  (matches nothing as the tree stands)\n' "${_REL_MISSING[@]}"
@@ -478,6 +652,9 @@ EOF
 	if [ "$build" = "1" ]; then
 		echo ""
 		echo "build: $build_command"
+		# In a subshell of this function, so the build command can read
+		# $version and $tag - the two names prel.artifacts fills in - as the
+		# shell variables they are here. Documented, so keep them named so.
 		if ! ( cd "$REPO_ROOT" && eval "$build_command" ); then
 			echo ""
 			echo "Error: the build failed, so there is no release to make" >&2
@@ -488,9 +665,10 @@ EOF
 	fi
 
 	if [ "$assets" = "1" ]; then
-		if ! _rel_expand_artifacts "$artifacts_spec"; then
+		if ! _rel_expand_artifacts "$artifacts_spec" "$version" "$tag"; then
 			echo "Error: these patterns in prel.artifacts matched no file:" >&2
 			printf '       %s\n' "${_REL_MISSING[@]}" >&2
+			_rel_placeholder_hint '       ' "${_REL_MISSING[@]}" >&2
 			if [ ${#_REL_ASSETS[@]} -gt 0 ]; then
 				echo "       what did match, and would have gone up alone:" >&2
 				printf '       %s\n' "${_REL_ASSETS[@]}" >&2

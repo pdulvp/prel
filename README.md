@@ -230,6 +230,8 @@ Move the VERSION file on, tag it, push it and publish the release.
 
 ```bash
 prel release usage              # Show help
+prel release artifacts          # Say what prel.artifacts matches, do nothing
+prel release artifacts 1.0.1    # The same, for a version not yet in the file
 prel release 1.0.1              # Bump, commit, tag, push, publish
 prel release 1.0.1 -n           # Show every step, change nothing
 prel release 1.0.1 -y           # Do not ask about uncommitted changes
@@ -267,6 +269,49 @@ git config prel.artifacts "build/*.deb build-win/*.zip"
 
 `prel.artifacts` is a whitespace-separated list of globs read from the
 repository root; paths with spaces in them are not expressible in it.
+
+A pattern can also name the release it is for, instead of globbing over every
+release ever built - `build/myapp-*.deb` happily uploads the `.deb` from last
+time alongside this one:
+
+```bash
+git config prel.artifacts 'build/myapp-${version}.deb dist/myapp-${tag}.zip'
+```
+
+`${version}` is the version being released, `1.0.1`, and `${tag}` the tag it
+gets, `v1.0.1`; the bare `$version` and `$tag` work too. Set them in **single
+quotes**, so the shell leaves the names for prel to fill in. They are filled in
+by plain string replacement rather than by a shell: a pattern becomes a
+filename, and nothing in it is allowed to run. `prel.buildCommand` *is* a shell
+command, and sees the same two as `$version` and `$tag`.
+
+A misspelt name is left as it stands, matches no file and so stops the release
+before the push, naming the two it knows. Attempting a release is a poor way to
+discover a typo, though, so there is a command that only looks:
+
+```console
+$ prel release artifacts
+artifacts: build/myapp-${version}.deb build-win/myapp-${tag}.zip
+version:   1.0.1 (from VERSION)
+tag:       v1.0.1
+
+filled in:
+  build/myapp-${version}.deb -> build/myapp-1.0.1.deb
+  build-win/myapp-${tag}.zip -> build-win/myapp-v1.0.1.zip
+would upload:
+  build/myapp-1.0.1.deb
+matched nothing:
+  build-win/myapp-v1.0.1.zip
+  a release would build them first: cmake --build build --target release
+
+1 pattern(s) matched nothing; a release would stop before the push
+```
+
+`prel release artifacts` needs none of what a release needs - no network, no
+`gh`, no free tag, nothing written and nothing built. The version is the one in
+the `VERSION` file as it stands, or the one given as `prel release artifacts
+1.0.1` for a release not yet made. It exits non-zero where a pattern matched no
+file, so a build script can gate on it.
 
 Two things about the order are deliberate. The build runs **before the push**,
 while the commit and the tag are still only local: a build that fails there
@@ -415,7 +460,8 @@ Read from the repository being worked on, not from prel:
   its `prel.plansDir`
 - `prel.buildCommand` - the command `prel release` runs to build the release
   artifacts, unset in a project whose release is the tag and nothing else
-- `prel.artifacts` - the globs of the files it then uploads to the release
+- `prel.artifacts` - the globs of the files it then uploads to the release,
+  where `${version}` and `${tag}` stand for the release being made
 
 ## How It Works
 
