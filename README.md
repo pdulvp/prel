@@ -255,23 +255,24 @@ Plans are read from `docs/plans`, or from the path in the repository's
 Move the VERSION file on, tag it, push it and publish the release.
 
 ```bash
-prel release usage              # Show help
-prel release artifacts          # Say what prel.artifacts matches, do nothing
-prel release artifacts 1.0.1    # The same, for a version not yet in the file
-prel release 1.0.1              # Bump, commit, tag, push, publish
-prel release 1.0.1 -n           # Show every step, change nothing
-prel release 1.0.1 -y           # Do not ask about uncommitted changes
-prel release 1.0.1 -m "..."     # Message for the commit and the tag
-prel release 1.0.1 --draft      # Publish the GitHub release as a draft
-prel release 1.0.1 --no-build   # Upload the artifacts without building them
-prel release 1.0.1 --no-assets  # Build nothing, upload nothing
-prel release 1.0.1 --no-release # Commit, tag and push, publish nothing
+prel release usage                # Show help
+prel release artifacts            # Say what prel.artifacts matches, do nothing
+prel release artifacts 1.0.1      # The same, for a version not yet in the file
+prel release 1.0.1                # Bump, commit, tag, push, publish
+prel release 1.0.1 -n             # Show every step, change nothing
+prel release 1.0.1 -y             # Do not ask about uncommitted changes
+prel release 1.0.1 -m "..."       # Message for the commit and the tag
+prel release 1.0.1 --draft        # Publish the GitHub release as a draft
+prel release 1.0.1 --no-build     # Upload the artifacts without building them
+prel release 1.0.1 --no-assets    # Build nothing, upload nothing
+prel release 1.0.1 --no-release   # Commit, tag and push, publish nothing
+prel release 1.0.1 --no-milestone # Create no milestone, move no issue
 ```
 
 For a project that keeps its version in a `VERSION` file at its root - three
 numbers in a file, which the build reads and nothing has to parse out of source
 code - a release is that file moved on and the commit it was moved in made
-public. Seven steps, stopping at the first that fails:
+public. Eight steps, stopping at the first that fails:
 
 1. write `1.0.1` into the `VERSION` file
 2. commit that file alone
@@ -281,6 +282,8 @@ public. Seven steps, stopping at the first that fails:
 6. create the GitHub release, its notes the commits since the last tag
 7. upload the artifacts in `prel.artifacts`, then take the release out of
    draft now that it has them
+8. put the issues these commits fixed on a milestone named after the tag, and
+   close them and it
 
 #### Release artifacts
 
@@ -355,6 +358,50 @@ dropped connection can be finished by running the upload again.
 `--no-build` uploads the artifacts as they already are on disk, for a build
 done by hand or by CI. `--no-assets` skips both steps, and `--no-release`
 implies it - with nowhere to upload to, the build would be work for nothing.
+
+#### Release milestones
+
+Step 8 collects the issues a release fixed onto a GitHub milestone of its own,
+named after the tag:
+
+```console
+$ prel release 0.2.2
+...
+Created milestone v0.2.2 (#1)
+Put #4, #5, #6 on v0.2.2 and closed them
+Closed milestone v0.2.2
+```
+
+Which issues those are is read out of the commits the release carries - the
+same range the notes are written from - and `prel issue-from-plans` is what put
+them there: it files the finished work as an issue and puts that number in
+front of the commit subject, so `#6 MIT licence, shipped as the package's
+copyright file` says in the history itself which issue the commit answered.
+Every `#<n>` in those subjects goes on the milestone.
+
+Subjects only. A commit filed by prel carries a `filed as issue #<n>` line in
+its body as well, and reading bodies would put the same issue on every
+milestone made after it.
+
+A project whose commits name no issue gets no milestone - an empty one per
+release is worse than none at all - so there is nothing to switch on here, and
+`--no-milestone` switches it off. `--no-release` implies it: with no release
+there is nothing for a milestone to be named after.
+
+The milestone is created if it is not there and reused if it is, so a release
+retried after a failed upload does not leave a second one behind. An issue
+already on **another** milestone stays there - an earlier release is where it
+was fixed - and a `#<n>` that answers to no issue, a pull request or a stray
+number, is reported rather than acted on.
+
+This is the last step, after the release has been taken out of draft, and the
+one step that never fails a release: by then the tag is pushed and the
+artifacts are up, and a milestone left half-made does not make any of that
+wrong. What it could not do it says, with the `gh` command that finishes it.
+
+`--draft` fills the milestone but closes nothing, neither the issues nor the
+milestone itself: a draft has not shipped, so the work on it is not released
+yet.
 
 Nothing is touched before every precondition is checked: a `VERSION` file to
 move, a three-number version (a `-rc1` suffix allowed), a branch rather than a

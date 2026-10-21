@@ -131,6 +131,160 @@ _rel_notes() {
 	printf '\n<sub>Published by prel from the VERSION file.</sub>\n'
 }
 
+# The issues a release fixes, read out of the commits it carries: prel's own
+# convention puts '#<n> ' in front of the subject, so the range that writes the
+# release notes is the range that names the issues. _REL_ISSUES comes back
+# holding the numbers, ascending and without repeats.
+#
+# Subjects only. Every commit filed by 'prel issue-from-plans' carries a
+# 'filed as issue #<n>' trailer in its body as well, and reading those would
+# put the same issue in every range it was ever mentioned in.
+_rel_issues_in_range() {
+	local previous="$1" range
+	_REL_ISSUES=()
+	if [ -n "$previous" ]; then
+		range="$previous..HEAD"
+	else
+		range="HEAD"
+	fi
+	mapfile -t _REL_ISSUES < <(
+		git log --no-merges --format='%s' "$range" 2>/dev/null \
+			| grep -oE '#[1-9][0-9]*' | tr -d '#' | sort -un
+	)
+}
+
+# '#4, #5, #6', for the lines that say which issues these are.
+_rel_issue_refs() {
+	local issue out=""
+	for issue in "$@"; do
+		[ -n "$out" ] && out="$out, "
+		out="$out#$issue"
+	done
+	printf '%s\n' "$out"
+}
+
+# The number of the milestone with this title, over every milestone the
+# repository has, open or closed; non-zero where there is none. The title is
+# what a milestone is known by here - it is the tag - and GitHub will not take
+# two alike, so the first match is the only one.
+_rel_milestone_find() {
+	local title="$1" number name
+	while IFS=' ' read -r number name; do
+		if [ "$name" = "$title" ]; then
+			printf '%s\n' "$number"
+			return 0
+		fi
+	done < <(gh api --paginate 'repos/:owner/:repo/milestones?state=all&per_page=100' \
+		--jq '.[] | "\(.number) \(.title)"' 2>/dev/null)
+	return 1
+}
+
+_rel_milestone_create() {
+	local title="$1" description="$2"
+	gh api --method POST repos/:owner/:repo/milestones \
+		-f title="$title" -f description="$description" --jq '.number' 2>/dev/null
+}
+
+# Step 8: the milestone this release is, holding the issues it fixed.
+#
+# Everything here happens after the release is published and out of draft, so
+# none of it is undoable and none of it is worth failing a made release over.
+# A non-zero return says something was left undone, which the caller reports
+# as a warning naming what to finish by hand - the release itself stands.
+#
+# 'close' is 0 for a draft: a draft has not shipped, so the milestone and the
+# issues on it stay open until it does.
+#
+# Each issue is looked at before it is touched. A '#<n>' that no issue answers
+# to is a pull request or a stray number, and is said rather than acted on; an
+# issue already on another milestone was fixed by an earlier release and is
+# left where it is. Neither is a failure, so neither sets the return.
+_rel_milestone_apply() {
+	local title="$1" close="$2"
+	shift 2
+	local number info issue state existing kind rc=0
+	local -a put=()
+
+	if number=$(_rel_milestone_find "$title"); then
+		echo "Milestone $title is there already"
+	elif number=$(_rel_milestone_create "$title" "The issues released as $title."); then
+		echo "Created milestone $title"
+	else
+		echo "Error: milestone $title could not be created, so no issue was moved" >&2
+		echo "       the issues this release fixed: $(_rel_issue_refs "$@")" >&2
+		return 1
+	fi
+
+	for issue in "$@"; do
+		# The REST issue, not 'gh issue view': that resolves a pull request
+		# number as though it were an issue, and a '#<n>' in a subject naming
+		# one would get a milestone put on the pull request and the pull
+		# request closed. Only this endpoint says which of the two it is.
+		if ! info=$(gh api "repos/:owner/:repo/issues/$issue" --jq \
+			'"\(.state)\t\(.milestone.title // "")\t\(if .pull_request then "pr" else "issue" end)"' \
+			2>/dev/null); then
+			echo "Warning: no issue #$issue here, so it is not on $title" >&2
+			continue
+		fi
+		# Cut by hand rather than with read: a tab is whitespace, so read
+		# would fold the two of them together whenever the middle field, the
+		# milestone an issue is already on, is the empty one.
+		state=${info%%$'\t'*}
+		kind=${info##*$'\t'}
+		existing=${info#*$'\t'}
+		existing=${existing%$'\t'*}
+
+		if [ "$kind" = "pr" ]; then
+			echo "Warning: #$issue is a pull request, not an issue; left alone" >&2
+			continue
+		fi
+		if [ -n "$existing" ] && [ "$existing" != "$title" ]; then
+			echo "Warning: #$issue is on milestone $existing already, left there" >&2
+			continue
+		fi
+		if [ "$existing" != "$title" ] \
+			&& ! gh issue edit "$issue" --milestone "$title" >/dev/null 2>&1; then
+			echo "Error: #$issue could not be put on $title" >&2
+			rc=1
+			continue
+		fi
+		put+=("$issue")
+
+		if [ "$close" = "1" ] && [ "$state" != "closed" ]; then
+			if ! gh issue close "$issue" >/dev/null 2>&1; then
+				echo "Error: #$issue is on $title but could not be closed" >&2
+				rc=1
+			fi
+		fi
+	done
+
+	if [ ${#put[@]} -gt 0 ]; then
+		if [ "$close" = "1" ]; then
+			echo "Put $(_rel_issue_refs "${put[@]}") on $title and closed them"
+		else
+			echo "Put $(_rel_issue_refs "${put[@]}") on $title"
+		fi
+	fi
+
+	if [ "$close" != "1" ]; then
+		echo "Milestone $title not closed: the release is a draft"
+		return $rc
+	fi
+
+	# Closed even where an issue above could not be: the release has shipped,
+	# and the warning is the record of what is left.
+	if ! gh api --method PATCH "repos/:owner/:repo/milestones/$number" \
+		-f state=closed >/dev/null 2>&1; then
+		echo "Error: milestone $title holds its issues but is still open" >&2
+		echo "       close it with 'gh api --method PATCH \\" >&2
+		echo "       repos/:owner/:repo/milestones/$number -f state=closed'" >&2
+		rc=1
+	else
+		echo "Closed milestone $title"
+	fi
+	return $rc
+}
+
 # Expand the artifact globs. _REL_ASSETS comes back holding every file matched
 # and _REL_MISSING the patterns that matched none; the return is non-zero if
 # any pattern did. Only regular files count: a pattern matching a directory
@@ -322,7 +476,7 @@ _rel_check_artifacts() {
 
 release() {
 	local version="" message="" dry_run=0 assume_yes=0 publish=1 draft=0
-	local no_build=0 no_assets=0
+	local no_build=0 no_assets=0 milestone=1
 
 	if [ "${1-usage}" = "usage" ]; then
 		cat <<EOF
@@ -342,6 +496,8 @@ Usage:
                                   Build nothing, upload nothing
   prel release <x.y.z> --no-release
                                   Commit, tag and push, publish nothing
+  prel release <x.y.z> --no-milestone
+                                  Create no milestone, move no issue
 
 Description:
   For a project that keeps its version in a VERSION file at its root, a
@@ -356,6 +512,8 @@ Description:
     6. create the GitHub release, its notes the commits since the last tag
     7. upload the artifacts in prel.artifacts, then take the release out of
        draft now that it has them
+    8. put the issues these commits fixed on a milestone named after the tag,
+       creating it if it is not there, and close them and it
 
   Steps 4 and 7 happen only in a project that has asked for them:
 
@@ -372,6 +530,15 @@ Description:
   as in 'build/myapp-\${version}.deb'. Single-quote it when setting it, so the
   shell leaves the name for prel to fill in. prel.buildCommand is a shell
   command and sees the same two as \$version and \$tag.
+
+  Step 8 reads the issues out of the commit subjects: 'prel issue-from-plans'
+  puts '#<n> ' in front of each one, so the range that writes the notes names
+  the issues too. A project whose commits name none gets no milestone, so
+  there is nothing to opt into and --no-milestone to opt out. It is the last
+  step and never fails a release that is already out: what it could not do it
+  says, with the gh command to finish it. An issue already on another
+  milestone is left there - an earlier release fixed it - and --draft creates
+  the milestone and fills it but closes nothing, a draft not having shipped.
 
   The build runs before the push, while the commit and the tag are still only
   local. A build that fails there undoes both and leaves nothing published,
@@ -414,6 +581,7 @@ EOF
 			--no-release) publish=0 ;;
 			--no-build) no_build=1 ;;
 			--no-assets) no_assets=1 ;;
+			--no-milestone) milestone=0 ;;
 			--draft) draft=1 ;;
 			-m|--message)
 				shift
@@ -528,6 +696,19 @@ EOF
 		assets=0
 		build=0
 	fi
+	# Nothing published means no milestone to put the issues on either.
+	[ "$publish" = "1" ] || milestone=0
+
+	# The previous tag, and with it the commits this release carries: the
+	# release notes are their subjects and the milestone is the issues those
+	# subjects name. Read from the history as it stands, before the release
+	# commit, which carries no change of its own worth listing.
+	local previous
+	previous=$(git describe --tags --abbrev=0 2>/dev/null) || previous=""
+	_rel_issues_in_range "$previous"
+	# A project not using the convention names no issue in any range, and gets
+	# no empty milestone per release for it.
+	[ ${#_REL_ISSUES[@]} -gt 0 ] || milestone=0
 
 	# Everything that is not the version file, captured before the file is
 	# written: from then on it is dirty itself and tells us nothing.
@@ -558,6 +739,15 @@ EOF
 	else
 		echo "publish:      GitHub release $tag"
 	fi
+	if [ "$milestone" = "1" ] && [ "$draft" = "1" ]; then
+		echo "milestone:    $tag, $(_rel_issue_refs "${_REL_ISSUES[@]}") (draft, closes nothing)"
+	elif [ "$milestone" = "1" ]; then
+		echo "milestone:    $tag, $(_rel_issue_refs "${_REL_ISSUES[@]}") closed with it"
+	elif [ "$publish" = "1" ] && [ ${#_REL_ISSUES[@]} -gt 0 ]; then
+		echo "milestone:    nothing, --no-milestone"
+	elif [ "$publish" = "1" ]; then
+		echo "milestone:    nothing, no issue named since ${previous:-the first commit}"
+	fi
 	if [ "$current" = "$version" ]; then
 		echo "note:         $version_file already reads $version, committing it as it stands"
 	fi
@@ -582,10 +772,7 @@ EOF
 		fi
 	fi
 
-	# The notes are read from the history as it stands: the release commit
-	# carries no change of its own worth listing.
-	local previous notes_file
-	previous=$(git describe --tags --abbrev=0 2>/dev/null) || previous=""
+	local notes_file
 
 	if [ "$dry_run" = "1" ]; then
 		echo "--- $version_file ------------------------------------------------------"
@@ -602,6 +789,20 @@ EOF
 				&& printf '%s  (matches nothing as the tree stands)\n' "${_REL_MISSING[@]}"
 			if [ "$build" = "1" ]; then
 				echo "(the build runs before this is checked, so it may yet produce them)"
+			fi
+		fi
+		if [ "$milestone" = "1" ]; then
+			echo "--- milestone ----------------------------------------------------------"
+			if _rel_milestone_find "$tag" >/dev/null; then
+				echo "$tag (there already)"
+			else
+				echo "$tag (would be created)"
+			fi
+			echo "issues: $(_rel_issue_refs "${_REL_ISSUES[@]}")"
+			if [ "$draft" = "1" ]; then
+				echo "(a draft closes nothing: neither the issues nor the milestone)"
+			else
+				echo "(the issues and the milestone would be closed)"
 			fi
 		fi
 		echo "--- release notes ------------------------------------------------------"
@@ -741,6 +942,21 @@ EOF
 				echo "       finish it with 'gh release edit $tag --draft=false'" >&2
 				return 1
 			fi
+		fi
+	fi
+
+	# Last, with the release out and nothing left to undo: the milestone the
+	# issues of this release belong on. A draft closes nothing - it has not
+	# shipped - and trouble here is a warning rather than a failed release,
+	# since the release is made whatever the milestone says.
+	if [ "$milestone" = "1" ]; then
+		echo ""
+		local close_milestone=1
+		[ "$draft" = "1" ] && close_milestone=0
+		if ! _rel_milestone_apply "$tag" "$close_milestone" "${_REL_ISSUES[@]}"; then
+			echo "Warning: $tag is released; it is the milestone above that is" >&2
+			echo "         unfinished - 'gh issue edit <n> --milestone $tag' and" >&2
+			echo "         'gh issue close <n>' are what is left" >&2
 		fi
 	fi
 
