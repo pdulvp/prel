@@ -72,7 +72,7 @@ EOF
 	local skills_home
 	skills_home=$(_skills_home)
 
-	local skill_dir name target
+	local skill_dir name target rc=0
 	case "$action" in
 		register)
 			mkdir -p "$skills_home" || return 1
@@ -89,21 +89,27 @@ EOF
 				if [ -e "$target" ]; then
 					echo "Error: $target already exists and is not prel's $name skill" >&2
 					echo "       Remove it first, or keep yours and skip prel's." >&2
+					rc=1
 					continue
 				fi
 
 				if [ "$mode" = "copy" ]; then
-					cp -r "$skill_dir" "$target" || continue
+					cp -r "$skill_dir" "$target" || { rc=1; continue; }
 				else
-					ln -s "$skill_dir" "$target" || continue
+					ln -s "$skill_dir" "$target" || { rc=1; continue; }
 				fi
 
 				if [ -r "$target/SKILL.md" ]; then
 					echo "Registered skill: $name -> $target"
 				else
 					echo "Error: $target/SKILL.md is not readable, skill will not load" >&2
+					rc=1
 				fi
 			done
+
+			# A skill prel could not place would leave the hooks reading a
+			# format nothing writes, so say so with the exit status.
+			return $rc
 			;;
 		unregister)
 			for skill_dir in "$source_dir"/*/; do

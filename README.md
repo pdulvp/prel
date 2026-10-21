@@ -7,13 +7,50 @@ A git management toolkit for configuring commit attribution and hooks across rep
 Run from any directory in a git repository:
 
 ```bash
-prel.sh
+prel.sh                 # the command list
+prel init register      # set this repository up
+prel init status        # what a commit here would file
 ```
 
 ## Commands
 
 ### prel usage
 Show detailed help for all available commands.
+
+### prel init
+Register everything prel shares with a repository, in one go.
+
+```bash
+prel init usage             # Show help
+prel init register          # Register the hooks, the skill and the memories
+prel init register --copy   # Install the skill as a copy instead of a symlink
+prel init unregister        # Remove the hooks and the memories from this repo
+prel init status            # The state of all three, and what the next commit
+                            # would file
+```
+
+prel shares three things with a repository, each with a command of its own: the
+hooks that file the completed work plans (`prel hooks`), the skill that is the
+format they read (`prel skills`), and the memories that make a session produce
+something to file (`prel memory`).
+
+All three are needed before `prel issue-from-plans` does anything, and missing
+one leaves the feature inert without saying so - a repository with no memories
+grows no plans, so there is never a sum-up to file, so no issue is ever filed.
+`prel init` is the one command to run in a new repository, and the one to ask
+afterwards.
+
+`register` is safe to run again: each step reports what was already in place,
+and leaves alone any local file of the same name that is not prel's. A step that
+could not do its work says so and makes the whole command exit non-zero, because
+a half-registered repository is the failure this command exists to surface.
+
+`unregister` removes only what belongs to this repository - the hooks and the
+memories. The skill lives in the user's skills directory and is shared by every
+repository, so it is kept; remove it with `prel skills unregister`.
+
+`status` adds the report of `prel issue-from-plans status` to the three, so one
+command answers whether a commit here would file an issue, and why not.
 
 ### prel init-authored-hooks (or **hooks**)
 Manage git hooks from the prel project.
@@ -22,11 +59,17 @@ Manage git hooks from the prel project.
 prel init-authored-hooks usage          # Show help
 prel init-authored-hooks register       # Set core.hooksPath to prel/.githooks
 prel init-authored-hooks unregister     # Remove core.hooksPath setting
+prel init-authored-hooks status         # Show whether they are registered
 
 # Shortcut:
 prel hooks register
 prel hooks unregister
+prel hooks status
 ```
+
+`status` reports `core.hooksPath`, whether each hook is executable - git skips
+one that is not, in silence - and what `commit.cleanup` will do to a `#12`
+subject.
 
 Registering also sets `commit.cleanup` to `scissors`, and unregistering puts it
 back. That setting is what lets a commit subject start with the `#12` of the
@@ -161,8 +204,8 @@ line becomes the issue title and the commit subject, and what follows becomes
 the commit body and the issue's lead. Without that file nothing is filed and the
 commit is an ordinary one, which is also what keeps the hooks inert in every
 repository that keeps no plans. The `plan-summary` skill is the format it
-follows, written by the Claude Code session that finishes the work - install it
-with `prel skills register`.
+follows, written by the Claude Code session that finishes the work - installed
+along with the rest by `prel init register`.
 
 Once a commit carries the issue, `post-commit` stamps `issue: <n>` into each
 plan it filed and deletes `sumup.md`.
@@ -256,7 +299,11 @@ Scripts can also be run directly from the `scripts/` directory:
 /mnt/Data/Works/prel/scripts/issue-from-plans.sh status
 /mnt/Data/Works/prel/scripts/init-skills.sh register
 /mnt/Data/Works/prel/scripts/init-memory.sh register
+/mnt/Data/Works/prel/scripts/init.sh status
 ```
+
+`scripts/init.sh` drives the other commands, so run directly it loads its
+siblings from the same directory first.
 
 ## Configuration Files
 
@@ -291,3 +338,8 @@ repository that registered prel, including those that want none of this.
 for the agent skills and the shared memories: links in `~/.claude/skills` and in
 the project's memory directory rather than a copy per project, so the prel
 checkout stays the single place they are edited.
+
+Those three registrations are independent, and the issue filing needs all of
+them, so `prel init` runs them together and `prel init status` reports them
+together - a repository missing one looks exactly like a repository where the
+hooks simply had nothing to do.

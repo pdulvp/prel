@@ -23,6 +23,7 @@ Usage:
   prel init-authored-hooks usage          Show this help
   prel init-authored-hooks register       Set core.hooksPath to prel/.githooks
   prel init-authored-hooks unregister     Remove core.hooksPath setting
+  prel init-authored-hooks status         Show whether they are registered
 
 Description:
   Registers the prel hooks directory with the current git repository.
@@ -55,10 +56,10 @@ EOF
 	
 	cd "$REPO_ROOT"
 	
+	local source_dir="$PREL_DIR/.githooks"
+	
 	case "$action" in
 		register)
-			local source_dir="$PREL_DIR/.githooks"
-			
 			# Check if prel .githooks exist
 			if [ ! -d "$source_dir" ]; then
 				echo "Error: No .githooks directory found in prel project ($source_dir)" >&2
@@ -92,6 +93,45 @@ EOF
 				git config --local --unset commit.cleanup
 				echo "Unset commit.cleanup (was: scissors)"
 			fi
+			;;
+		status)
+			local current cleanup hook
+			current=$(git config --get core.hooksPath 2>/dev/null || true)
+
+			echo "hooks directory: $source_dir"
+			if [ "$current" = "$source_dir" ]; then
+				echo "  core.hooksPath: registered"
+			elif [ -n "$current" ]; then
+				echo "  core.hooksPath: $current, not prel's hooks"
+			else
+				echo "  core.hooksPath: not registered"
+			fi
+
+			# A hook git cannot execute is skipped in silence, which looks
+			# exactly like a hook that decided to do nothing.
+			for hook in "$source_dir"/*; do
+				[ -f "$hook" ] || continue
+				if [ -x "$hook" ]; then
+					echo "  $(basename "$hook"): executable"
+				else
+					echo "  $(basename "$hook"): not executable, git will skip it"
+				fi
+			done
+
+			# What git will do to a '#12' subject once the hooks have run.
+			cleanup=$(git config --get commit.cleanup 2>/dev/null || true)
+			case "$cleanup" in
+				scissors)
+					echo "  commit.cleanup: scissors, an issue number can lead the subject"
+					;;
+				whitespace|verbatim)
+					echo "  commit.cleanup: $cleanup, which also keeps a '#number' subject"
+					;;
+				*)
+					echo "  commit.cleanup: ${cleanup:-unset}, which drops a '#number' subject"
+					echo "                  run 'prel init-authored-hooks register' to set it to scissors"
+					;;
+			esac
 			;;
 		*)
 			echo "Error: Unknown action '$action' for init-authored-hooks" >&2

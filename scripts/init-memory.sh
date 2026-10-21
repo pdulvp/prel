@@ -142,7 +142,7 @@ EOF
 	local mem_dir
 	mem_dir=$(_mem_project_memory_dir "$REPO_ROOT")
 
-	local file name target
+	local file name target rc=0
 	case "$action" in
 		register)
 			mkdir -p "$mem_dir" || return 1
@@ -155,6 +155,7 @@ EOF
 						echo "Already registered: $name"
 					else
 						echo "Error: $target already links elsewhere, left alone" >&2
+						rc=1
 						continue
 					fi
 				elif [ -e "$target" ]; then
@@ -166,15 +167,29 @@ EOF
 					else
 						echo "Error: $target differs from prel's $name, left alone" >&2
 						echo "       Merge it into $file by hand, then register again." >&2
+						rc=1
 						continue
 					fi
 				else
-					ln -s "$file" "$target" && echo "Registered memory: $name"
+					if ln -s "$file" "$target"; then
+						echo "Registered memory: $name"
+					else
+						echo "Error: could not link $name into $mem_dir" >&2
+						rc=1
+					fi
 				fi
 			done < <(_mem_shared_files "$source_dir")
 
-			_mem_write_index "$mem_dir" "$source_dir" 1 \
-				&& echo "Indexed them in $mem_dir/MEMORY.md"
+			if _mem_write_index "$mem_dir" "$source_dir" 1; then
+				echo "Indexed them in $mem_dir/MEMORY.md"
+			else
+				rc=1
+			fi
+
+			# A memory prel could not place is the silent half-registration
+			# 'prel init' is there to surface, so it has to be an exit status
+			# too and not only a line on stderr.
+			return $rc
 			;;
 		unregister)
 			while IFS= read -r file; do
