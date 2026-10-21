@@ -225,6 +225,58 @@ skips the whole thing, and so does `git commit --no-verify`.
 Plans are read from `docs/plans`, or from the path in the repository's
 `prel.plansDir` git config.
 
+### prel release
+Move the VERSION file on, tag it, push it and publish the release.
+
+```bash
+prel release usage              # Show help
+prel release 1.0.1              # Bump, commit, tag, push, publish
+prel release 1.0.1 -n           # Show every step, change nothing
+prel release 1.0.1 -y           # Do not ask about uncommitted changes
+prel release 1.0.1 -m "..."     # Message for the commit and the tag
+prel release 1.0.1 --draft      # Publish the GitHub release as a draft
+prel release 1.0.1 --no-release # Commit, tag and push, publish nothing
+```
+
+For a project that keeps its version in a `VERSION` file at its root - three
+numbers in a file, which the build reads and nothing has to parse out of source
+code - a release is that file moved on and the commit it was moved in made
+public. Five steps, stopping at the first that fails:
+
+1. write `1.0.1` into the `VERSION` file
+2. commit that file alone
+3. tag the commit, annotated, as `v1.0.1`
+4. push the branch and the tag
+5. create the GitHub release, its notes the commits since the last tag
+
+Nothing is touched before every precondition is checked: a `VERSION` file to
+move, a three-number version (a `-rc1` suffix allowed), a branch rather than a
+detached HEAD, a tag free both here and on the remote, and a usable `gh` unless
+`--no-release` says not to publish. A release half made is worse than one not
+started - which is also why a failure after the commit says what is local and
+what is pushed.
+
+Uncommitted changes are not carried into a release. Where the tree has any, the
+command lists them and asks, since committing the version alone leaves them
+exactly where they were:
+
+```
+This tree has changes that will NOT be part of the release:
+   M app.txt
+  ?? scratch.txt
+
+Only VERSION would be committed; these stay exactly as they are.
+Release 1.0.1 anyway? [y/N]
+```
+
+`-y` answers yes in advance, and no terminal to ask on is an answer of no - a
+command that pushes and publishes does not take a redirected pipe for consent.
+
+The tag is `v<x.y.z>`, or the version alone where `prel.tagPrefix` is set to an
+empty string. The file is `VERSION`, or the path in `prel.versionFile`. The
+release commit is made with `PREL_SKIP_ISSUE` set, so it never spends the issue
+that `prel issue-from-plans` is holding for the next real commit.
+
 ### prel init-skills (or **skills**)
 Make the prel agent skills available to Claude Code.
 
@@ -318,6 +370,13 @@ siblings from the same directory first.
 - `skills/plan-summary/SKILL.md` - The format of `docs/plans/sumup.md`
 - `memory/*.md` - Claude Code memories shared across repositories, plus the
   `INDEX.md` lines spliced into each project's `MEMORY.md`
+
+Read from the repository being worked on, not from prel:
+
+- `VERSION` - the three numbers `prel release` moves on, or the path in the
+  repository's `prel.versionFile` git config
+- `docs/plans/` - the work plans `prel issue-from-plans` files, or the path in
+  its `prel.plansDir`
 
 ## How It Works
 
