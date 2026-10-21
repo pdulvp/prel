@@ -7,10 +7,36 @@ A git management toolkit for configuring commit attribution and hooks across rep
 Run from any directory in a git repository:
 
 ```bash
-prel.sh                 # the command list
+prel                    # the command list
 prel init register      # set this repository up
 prel init status        # what a commit here would file
 ```
+
+## Installing
+
+A release carries a `.deb`, which is the shortest way onto a Debian or Ubuntu
+machine. `apt` rather than `dpkg -i`, so the dependencies are resolved:
+
+```bash
+sudo apt install ./prel_0.1.0_all.deb
+```
+
+The package puts the tree under `/usr/share/prel` and symlinks `/usr/bin/prel`
+to it, so `prel` works from anywhere and the hooks, the skill and the memories
+are shared from there. It is `Architecture: all` - prel is shell, so there is
+nothing to compile and one file fits every machine.
+
+From a clone instead, put `prel.sh` on the `PATH` under the name `prel`:
+
+```bash
+git clone https://github.com/pdulvp/prel.git
+sudo ln -s "$PWD/prel/prel.sh" /usr/local/bin/prel
+```
+
+Either way `prel` resolves the symlink before it looks for `scripts/`, so it
+finds its own tree rather than the directory the link happens to sit in. A
+clone is the better one to work from: the registrations are links back into it,
+so an edit there is live everywhere it is registered, with nothing to reinstall.
 
 ## Commands
 
@@ -437,6 +463,50 @@ Scripts can also be run directly from the `scripts/` directory:
 
 `scripts/init.sh` drives the other commands, so run directly it loads its
 siblings from the same directory first.
+
+## Packaging
+
+`packaging/build-deb.sh` builds the `.deb`:
+
+```bash
+packaging/build-deb.sh            # at the version in the VERSION file
+packaging/build-deb.sh 0.2.0      # at that version instead
+```
+
+It writes `build/prel_<version>_all.deb`, staging the package tree beside it.
+Both are gitignored. `dpkg-deb` is all it needs - no `debian/` directory, no
+`dpkg-buildpackage`, no changelog, since an architecture-independent shell
+package has nothing those would do for it. There is no apt repository: the
+`.deb` goes on the release page and is installed by hand.
+
+It is in `packaging/` rather than `scripts/` on purpose. `prel.sh` sources
+every `scripts/*.sh` and turns it into a command, so a build script there
+would ship a `prel build-deb` to everyone who installs the package - a command
+about prel's own clone, in the hands of people who do not have one.
+
+The payload is named file by file in the script, a whitelist rather than a
+blacklist: a top-level directory added to the repository later has to be named
+there before it ships. The package also sets its own modes instead of
+inheriting the clone's, which are group-writable and in places mode 770 -
+installed root-owned under `/usr/share`, that would leave
+`/usr/share/prel/prel.sh` unreadable to every user but root, and the package
+would install cleanly and then refuse to run.
+
+`prel release` builds and attaches it through the two settings every project
+configures for itself. They are git config, so they live in `.git/config` and
+cannot be committed - git will not let a tracked file set them - which means
+one clone of prel has them and a fresh clone does not:
+
+```bash
+git config prel.buildCommand 'packaging/build-deb.sh ${version}'
+git config prel.artifacts    'build/prel_${version}_all.deb'
+```
+
+Single quotes both times, so git stores the `${version}` placeholder rather
+than today's version: `prel release` fills it in at release time, which is how
+the build is told which version it is building and how the artifact is found
+once it has. `prel release artifacts` says what they resolve to without
+building anything.
 
 ## Configuration Files
 

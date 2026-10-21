@@ -7,8 +7,11 @@
 #   prel <command> [action]     Execute a command with optional action
 #   prel usage                 Show all available commands and their usage
 
-# Get the directory where this script is located (prel project root)
-PREL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get the directory where this script is located (prel project root). The
+# symlink is resolved first: installed as a package, /usr/bin/prel points at
+# /usr/share/prel/prel.sh, and BASH_SOURCE holds the path prel was invoked as
+# rather than the one it lives at. A no-op in a clone.
+PREL_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Export PREL_DIR so sub-scripts can use it
 export PREL_DIR
