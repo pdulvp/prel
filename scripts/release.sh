@@ -28,6 +28,19 @@ _rel_tag_prefix() {
 	fi
 }
 
+# The command that builds the release artifacts, run from the repository root.
+# Unset in most projects, where a release is the tag and nothing else.
+_rel_build_command() {
+	git config --get prel.buildCommand 2>/dev/null || true
+}
+
+# The artifacts to attach to the release, as whitespace-separated globs read
+# from the repository root: "build/*.deb build-win/*.zip". A list of patterns
+# cannot also hold paths with spaces in them; that is the trade made here.
+_rel_artifacts_spec() {
+	git config --get prel.artifacts 2>/dev/null || true
+}
+
 _rel_remote() {
 	local remote
 	if git remote get-url origin >/dev/null 2>&1; then
@@ -82,8 +95,83 @@ _rel_notes() {
 	printf '\n<sub>Published by prel from the VERSION file.</sub>\n'
 }
 
+# Expand the artifact globs. _REL_ASSETS comes back holding every file matched
+# and _REL_MISSING the patterns that matched none; the return is non-zero if
+# any pattern did. Only regular files count: a pattern matching a directory
+# alone has not found the file it was written for.
+#
+# An unmatched pattern is the failure worth stopping on. It is how a release
+# ends up published without the Windows zip nobody noticed was missing.
+_rel_expand_artifacts() {
+	local spec="$1" pattern candidate nullglob_was_set
+	local -a patterns matches
+	_REL_ASSETS=()
+	_REL_MISSING=()
+
+	# Split the list first, and with 'read' rather than word splitting, so that
+	# nullglob below cannot make a pattern matching nothing disappear before it
+	# has been reported as matching nothing.
+	read -ra patterns <<< "$spec"
+
+	shopt -q nullglob && nullglob_was_set=1 || nullglob_was_set=0
+	shopt -s nullglob
+	for pattern in "${patterns[@]}"; do
+		matches=()
+		# Unquoted on purpose: this is the pathname expansion being asked for.
+		for candidate in $pattern; do
+			[ -f "$candidate" ] && matches+=("$candidate")
+		done
+		if [ ${#matches[@]} -eq 0 ]; then
+			_REL_MISSING+=("$pattern")
+		else
+			_REL_ASSETS+=("${matches[@]}")
+		fi
+	done
+	[ "$nullglob_was_set" = "1" ] || shopt -u nullglob
+
+	[ ${#_REL_MISSING[@]} -eq 0 ]
+}
+
+# Undo the release commit and its tag, putting the version file back from the
+# copy taken before it was written and leaving the rest of the tree exactly as
+# it was. Deliberately not 'reset --hard': this command releases from a dirty
+# tree on purpose, so it must never discard the changes it warned about and
+# then kept. Returns non-zero where there is no parent commit to step back to,
+# which is the one case the caller has to report rather than fix.
+_rel_rollback_release_commit() {
+	local tag="$1" version_file="$2" backup="$3"
+
+	git tag -d "$tag" >/dev/null 2>&1
+
+	git rev-parse -q --verify HEAD~1 >/dev/null 2>&1 || return 1
+	git reset --quiet --soft HEAD~1 || return 1
+	# Mixed reset of that one path: the index goes back to HEAD for the version
+	# file and every other staged path keeps whatever it held.
+	git reset -q -- "$version_file" >/dev/null 2>&1
+	if [ -n "$backup" ] && [ -f "$backup" ]; then
+		cp "$backup" "$version_file" || return 1
+	fi
+	return 0
+}
+
+# Roll the release commit and tag back and say what is left, for the two
+# failures that can happen while it is all still local. Drops the copy of the
+# version file either way: there is no second attempt to make from it.
+_rel_undo_and_report() {
+	local tag="$1" version_file="$2" backup="$3" current="$4"
+	if _rel_rollback_release_commit "$tag" "$version_file" "$backup"; then
+		echo "       the commit and $tag are undone, $version_file back at $current" >&2
+		echo "       nothing was pushed or published, so this can be run again" >&2
+	else
+		echo "       the commit and $tag could not be undone here; nothing was" >&2
+		echo "       pushed or published, but $version_file reads $current no more" >&2
+	fi
+	rm -f "$backup"
+}
+
 release() {
 	local version="" message="" dry_run=0 assume_yes=0 publish=1 draft=0
+	local no_build=0 no_assets=0
 
 	if [ "${1-usage}" = "usage" ]; then
 		cat <<EOF
@@ -96,19 +184,38 @@ Usage:
   prel release <x.y.z> -y         Do not ask about uncommitted changes
   prel release <x.y.z> -m <msg>   Use <msg> for the commit and the tag
   prel release <x.y.z> --draft    Publish the GitHub release as a draft
+  prel release <x.y.z> --no-build Upload the artifacts without building them
+  prel release <x.y.z> --no-assets
+                                  Build nothing, upload nothing
   prel release <x.y.z> --no-release
                                   Commit, tag and push, publish nothing
 
 Description:
   For a project that keeps its version in a VERSION file at its root, a
   release is that file moved on and the commit it was moved in made public.
-  This does the five steps in order, and stops at the first one that fails:
+  This does the steps in order, and stops at the first one that fails:
 
     1. write <x.y.z> into the VERSION file
     2. commit that file alone
     3. tag the commit, annotated, as v<x.y.z>
-    4. push the branch and the tag
-    5. create the GitHub release, its notes the commits since the last tag
+    4. build the artifacts, where prel.buildCommand says how
+    5. push the branch and the tag
+    6. create the GitHub release, its notes the commits since the last tag
+    7. upload the artifacts in prel.artifacts, then take the release out of
+       draft now that it has them
+
+  Steps 4 and 7 happen only in a project that has asked for them:
+
+    git config prel.buildCommand "cmake --build build --target release"
+    git config prel.artifacts "build/*.deb build-win/*.zip"
+
+  The build runs before the push, while the commit and the tag are still only
+  local. A build that fails there undoes both and leaves nothing published,
+  rather than a public tag whose release holds no files. The release is created
+  as a draft whenever there are artifacts and taken out of draft once they are
+  all up, so it is never visible without them; --draft leaves it a draft. A
+  pattern matching no file stops the release before the push - that is how a
+  release goes out missing the one artifact nobody checked for.
 
   Nothing is touched before every precondition is checked: a VERSION file to
   move, a three-number version, a branch rather than a detached HEAD, a tag
@@ -134,6 +241,8 @@ EOF
 			-n|--dry-run) dry_run=1 ;;
 			-y|--yes) assume_yes=1 ;;
 			--no-release) publish=0 ;;
+			--no-build) no_build=1 ;;
+			--no-assets) no_assets=1 ;;
 			--draft) draft=1 ;;
 			-m|--message)
 				shift
@@ -236,6 +345,20 @@ EOF
 
 	[ -n "$message" ] || message="Release $version"
 
+	# What the project asked for, and what the options make of it. Nothing to
+	# upload to means nothing worth building, so --no-release and --no-assets
+	# both take the build down with them.
+	local build_command artifacts_spec build=0 assets=0
+	build_command=$(_rel_build_command)
+	artifacts_spec=$(_rel_artifacts_spec)
+	[ -n "$build_command" ] && build=1
+	[ -n "$artifacts_spec" ] && assets=1
+	[ "$no_build" = "1" ] && build=0
+	if [ "$no_assets" = "1" ] || [ "$publish" = "0" ]; then
+		assets=0
+		build=0
+	fi
+
 	# Everything that is not the version file, captured before the file is
 	# written: from then on it is dirty itself and tells us nothing.
 	local others
@@ -246,10 +369,24 @@ EOF
 	echo "commit:       $message"
 	echo "tag:          $tag (annotated)"
 	echo "push:         $remote $branch, $remote $tag"
-	if [ "$publish" = "1" ]; then
-		echo "publish:      GitHub release $tag$([ "$draft" = "1" ] && printf ' (draft)')"
-	else
+	if [ "$build" = "1" ]; then
+		echo "build:        $build_command"
+	elif [ -n "$build_command" ]; then
+		echo "build:        nothing, prel.buildCommand not run"
+	fi
+	if [ "$assets" = "1" ]; then
+		echo "artifacts:    $artifacts_spec"
+	elif [ -n "$artifacts_spec" ]; then
+		echo "artifacts:    nothing, prel.artifacts not uploaded"
+	fi
+	if [ "$publish" != "1" ]; then
 		echo "publish:      nothing, --no-release"
+	elif [ "$draft" = "1" ]; then
+		echo "publish:      GitHub release $tag (draft)"
+	elif [ "$assets" = "1" ]; then
+		echo "publish:      GitHub release $tag (draft until the artifacts are up)"
+	else
+		echo "publish:      GitHub release $tag"
 	fi
 	if [ "$current" = "$version" ]; then
 		echo "note:         $version_file already reads $version, committing it as it stands"
@@ -283,6 +420,16 @@ EOF
 	if [ "$dry_run" = "1" ]; then
 		echo "--- $version_file ------------------------------------------------------"
 		echo "$version"
+		if [ "$assets" = "1" ]; then
+			echo "--- artifacts ----------------------------------------------------------"
+			_rel_expand_artifacts "$artifacts_spec"
+			[ ${#_REL_ASSETS[@]} -gt 0 ] && printf '%s\n' "${_REL_ASSETS[@]}"
+			[ ${#_REL_MISSING[@]} -gt 0 ] \
+				&& printf '%s  (matches nothing as the tree stands)\n' "${_REL_MISSING[@]}"
+			if [ "$build" = "1" ]; then
+				echo "(the build runs before this is checked, so it may yet produce them)"
+			fi
+		fi
 		echo "--- release notes ------------------------------------------------------"
 		_rel_notes "$tag" "$previous"
 		echo "------------------------------------------------------------------------"
@@ -291,7 +438,20 @@ EOF
 		return 0
 	fi
 
+	# Copied aside while it still holds the old version, so a failed build can
+	# put the file back byte for byte rather than rebuild it from what it read.
+	local backup=""
+	if [ "$build" = "1" ] || [ "$assets" = "1" ]; then
+		backup=$(mktemp) || return 1
+		if ! cp "$version_file" "$backup"; then
+			rm -f "$backup"
+			echo "Error: could not copy $version_file aside" >&2
+			return 1
+		fi
+	fi
+
 	printf '%s\n' "$version" > "$version_file" || {
+		rm -f "$backup"
 		echo "Error: could not write $version_file" >&2
 		return 1
 	}
@@ -300,6 +460,7 @@ EOF
 	# plans, and must not spend the issue the sum-up is waiting for.
 	if ! PREL_SKIP_ISSUE=1 git commit --quiet -m "$message" -- "$version_file"; then
 		echo "Error: the release commit failed, $version_file left at $version" >&2
+		rm -f "$backup"
 		return 1
 	fi
 	echo "Committed $version_file at $version"
@@ -307,9 +468,44 @@ EOF
 	if ! git tag -a "$tag" -m "$message"; then
 		echo "Error: could not create tag $tag; the commit stands" >&2
 		echo "       undo it with 'git reset --hard HEAD~1' if you want it gone" >&2
+		rm -f "$backup"
 		return 1
 	fi
 	echo "Tagged $tag"
+
+	# Everything from here to the push is undoable, and that is the point of
+	# building here rather than after it.
+	if [ "$build" = "1" ]; then
+		echo ""
+		echo "build: $build_command"
+		if ! ( cd "$REPO_ROOT" && eval "$build_command" ); then
+			echo ""
+			echo "Error: the build failed, so there is no release to make" >&2
+			_rel_undo_and_report "$tag" "$version_file" "$backup" "$current"
+			return 1
+		fi
+		echo ""
+	fi
+
+	if [ "$assets" = "1" ]; then
+		if ! _rel_expand_artifacts "$artifacts_spec"; then
+			echo "Error: these patterns in prel.artifacts matched no file:" >&2
+			printf '       %s\n' "${_REL_MISSING[@]}" >&2
+			if [ ${#_REL_ASSETS[@]} -gt 0 ]; then
+				echo "       what did match, and would have gone up alone:" >&2
+				printf '       %s\n' "${_REL_ASSETS[@]}" >&2
+			fi
+			echo "       a release is not published short of its artifacts" >&2
+			_rel_undo_and_report "$tag" "$version_file" "$backup" "$current"
+			return 1
+		fi
+		echo "Artifacts to upload:"
+		printf '  %s\n' "${_REL_ASSETS[@]}"
+	fi
+
+	# Past this line nothing is undoable, so the copy has no further use.
+	rm -f "$backup"
+	backup=""
 
 	if ! git push --quiet "$remote" "$branch"; then
 		echo "Error: could not push $branch to $remote; the commit and $tag are local" >&2
@@ -334,7 +530,11 @@ EOF
 	_rel_notes "$tag" "$previous" > "$notes_file"
 
 	local -a gh_args=(release create "$tag" --title "$tag" --notes-file "$notes_file")
-	[ "$draft" = "1" ] && gh_args+=(--draft)
+	# A draft either because that is what was asked for, or because artifacts
+	# are still to come and a release without them is not one.
+	if [ "$draft" = "1" ] || [ "$assets" = "1" ]; then
+		gh_args+=(--draft)
+	fi
 
 	local url
 	if ! url=$(gh "${gh_args[@]}" 2>&1); then
@@ -345,8 +545,33 @@ EOF
 	fi
 	rm -f "$notes_file"
 
+	if [ "$assets" = "1" ]; then
+		if ! gh release upload "$tag" --clobber "${_REL_ASSETS[@]}"; then
+			echo "Error: the artifacts could not be uploaded; $tag is published as a" >&2
+			echo "       draft, so nobody is looking at a release without them" >&2
+			echo "       the files are built and waiting:" >&2
+			printf '       %s\n' "${_REL_ASSETS[@]}" >&2
+			echo "       finish it with 'gh release upload $tag --clobber <files>'" >&2
+			[ "$draft" != "1" ] && echo "       then 'gh release edit $tag --draft=false'" >&2
+			return 1
+		fi
+		echo "Uploaded ${#_REL_ASSETS[@]} artifact(s) to $tag"
+
+		if [ "$draft" != "1" ]; then
+			if ! gh release edit "$tag" --draft=false >/dev/null; then
+				echo "Error: $tag has its artifacts but could not be taken out of draft" >&2
+				echo "       finish it with 'gh release edit $tag --draft=false'" >&2
+				return 1
+			fi
+		fi
+	fi
+
 	echo ""
-	echo "prel release: $version released as $tag"
+	if [ "$draft" = "1" ]; then
+		echo "prel release: $version is tagged and pushed, $tag waiting as a draft"
+	else
+		echo "prel release: $version released as $tag"
+	fi
 	printf '%s\n' "$url" | sed -n 's#.*\(https://[^ ]*\).*#              \1#p' | tail -1
 	return 0
 }

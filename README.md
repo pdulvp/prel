@@ -235,19 +235,55 @@ prel release 1.0.1 -n           # Show every step, change nothing
 prel release 1.0.1 -y           # Do not ask about uncommitted changes
 prel release 1.0.1 -m "..."     # Message for the commit and the tag
 prel release 1.0.1 --draft      # Publish the GitHub release as a draft
+prel release 1.0.1 --no-build   # Upload the artifacts without building them
+prel release 1.0.1 --no-assets  # Build nothing, upload nothing
 prel release 1.0.1 --no-release # Commit, tag and push, publish nothing
 ```
 
 For a project that keeps its version in a `VERSION` file at its root - three
 numbers in a file, which the build reads and nothing has to parse out of source
 code - a release is that file moved on and the commit it was moved in made
-public. Five steps, stopping at the first that fails:
+public. Seven steps, stopping at the first that fails:
 
 1. write `1.0.1` into the `VERSION` file
 2. commit that file alone
 3. tag the commit, annotated, as `v1.0.1`
-4. push the branch and the tag
-5. create the GitHub release, its notes the commits since the last tag
+4. build the artifacts, where `prel.buildCommand` says how
+5. push the branch and the tag
+6. create the GitHub release, its notes the commits since the last tag
+7. upload the artifacts in `prel.artifacts`, then take the release out of
+   draft now that it has them
+
+#### Release artifacts
+
+Steps 4 and 7 are there for a project whose build produces files that belong on
+the release - a `.deb`, a Windows `.zip` - and are skipped entirely by one that
+has not asked for them:
+
+```bash
+git config prel.buildCommand "cmake --build build --target release"
+git config prel.artifacts "build/*.deb build-win/*.zip"
+```
+
+`prel.artifacts` is a whitespace-separated list of globs read from the
+repository root; paths with spaces in them are not expressible in it.
+
+Two things about the order are deliberate. The build runs **before the push**,
+while the commit and the tag are still only local: a build that fails there
+undoes both and leaves nothing published, rather than a public tag whose
+release holds no files and a version that cannot be released again. And the
+release is created as a **draft** whenever there are artifacts, taken out of
+draft only once they are all up, so it is never visible without them -
+`--draft` simply leaves it there.
+
+A pattern that matches no file stops the release, before the push, for the same
+reason: that is how a release goes out missing the one artifact nobody thought
+to check for. The upload is `--clobber`, so a release left half-uploaded by a
+dropped connection can be finished by running the upload again.
+
+`--no-build` uploads the artifacts as they already are on disk, for a build
+done by hand or by CI. `--no-assets` skips both steps, and `--no-release`
+implies it - with nowhere to upload to, the build would be work for nothing.
 
 Nothing is touched before every precondition is checked: a `VERSION` file to
 move, a three-number version (a `-rc1` suffix allowed), a branch rather than a
@@ -377,6 +413,9 @@ Read from the repository being worked on, not from prel:
   repository's `prel.versionFile` git config
 - `docs/plans/` - the work plans `prel issue-from-plans` files, or the path in
   its `prel.plansDir`
+- `prel.buildCommand` - the command `prel release` runs to build the release
+  artifacts, unset in a project whose release is the tag and nothing else
+- `prel.artifacts` - the globs of the files it then uploads to the release
 
 ## How It Works
 
