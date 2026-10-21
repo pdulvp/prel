@@ -1,0 +1,2 @@
+- [Write the plan before coding](write-plan-before-coding.md) — steps go in a crash-proof plan file first; mark it complete, sum it up, then archive it to docs/plans/.
+- [Resume from the plan file](resume-from-plan-file.md) — on "continue where you left off", read the most recently modified plan in docs/plans/ before anything else.

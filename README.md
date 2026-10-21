@@ -206,6 +206,44 @@ Shipped today:
 - **plan-summary** - the format of `docs/plans/sumup.md`, which
   `prel issue-from-plans` turns into a GitHub issue and a commit subject.
 
+### prel init-memory (or **memory**)
+Share prel's Claude Code memories with a repository.
+
+```bash
+prel init-memory usage         # Show help
+prel init-memory register      # Link prel's memories into this project
+prel init-memory unregister    # Remove them from this project
+prel init-memory status        # Show which ones are linked
+
+# Shortcut:
+prel memory register
+```
+
+Claude Code keeps its memories per project, under
+`$CLAUDE_CONFIG_DIR/projects/<the repo path with dashes>/memory`. A convention
+shared by several repositories would have to be written there once per
+repository, and would then drift.
+
+`register` links the memories shipped in `prel/memory` into the current
+repository's memory directory and splices their index lines into its
+`MEMORY.md`, between the markers prel owns. The memories themselves stay in the
+prel checkout: that is where they are edited, and every registered repository
+sees the edit at once.
+
+Memories belonging to one repository alone - its build, its stack - stay where
+they are. prel only ever rewrites its own block of `MEMORY.md`, and refuses to
+touch a local file of the same name that says something different.
+
+Shipped today:
+
+- **write-plan-before-coding** - write the steps to `docs/plans/plan.md` first,
+  mark it complete, sum it up, archive it.
+- **resume-from-plan-file** - on "continue where you left off", read the newest
+  plan in `docs/plans/` before anything else.
+
+Both are the convention `prel issue-from-plans` and the `plan-summary` skill are
+built around, so a repository using those wants them.
+
 ## Direct Script Usage
 
 Scripts can also be run directly from the `scripts/` directory:
@@ -217,6 +255,7 @@ Scripts can also be run directly from the `scripts/` directory:
 /mnt/Data/Works/prel/scripts/exclude-from-git.sh secrets.env
 /mnt/Data/Works/prel/scripts/issue-from-plans.sh status
 /mnt/Data/Works/prel/scripts/init-skills.sh register
+/mnt/Data/Works/prel/scripts/init-memory.sh register
 ```
 
 ## Configuration Files
@@ -230,6 +269,8 @@ Scripts can also be run directly from the `scripts/` directory:
   should it have been edited away
 - `.githooks/post-commit` - Stamps the filed plans and consumes their sum-up
 - `skills/plan-summary/SKILL.md` - The format of `docs/plans/sumup.md`
+- `memory/*.md` - Claude Code memories shared across repositories, plus the
+  `INDEX.md` lines spliced into each project's `MEMORY.md`
 
 ## How It Works
 
@@ -246,6 +287,7 @@ is also inert where it has nothing to do - no `commit.coauthor`, no
 `docs/plans/sumup.md` - because `core.hooksPath` makes every hook live in every
 repository that registered prel, including those that want none of this.
 
-`prel init-skills register` works the same way for the agent skills: a link in
-`~/.claude/skills` rather than a copy per project, so the prel checkout stays
-the single place they are edited.
+`prel init-skills register` and `prel init-memory register` work the same way
+for the agent skills and the shared memories: links in `~/.claude/skills` and in
+the project's memory directory rather than a copy per project, so the prel
+checkout stays the single place they are edited.
