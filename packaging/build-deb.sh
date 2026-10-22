@@ -54,9 +54,9 @@ Description:
   /usr/bin/prel to /usr/share/prel/prel.sh, so an installed prel shares the
   hooks, the skill and the memories from there.
 
-  'prel release' calls this through prel.buildCommand, which passes the
-  version being released as the argument - the VERSION file is already at that
-  version by then, so either source gives the same answer.
+  'prel release' calls this through releaseBuildCommand in prel.config.json,
+  which passes the version being released as the argument - the VERSION file
+  is already at that version by then, so either source gives the same answer.
 
   Install the result with apt, which resolves the dependencies:
 

@@ -17,14 +17,24 @@
 # Every key prel reads, and what it means where the file says nothing. 'list'
 # is the one array, 'text' the plain strings; the type is what _prel_config_check
 # holds a value against.
-_PREL_CONFIG_KEYS=(versionFile tagPrefix buildCommand artifacts plansDir)
+_PREL_CONFIG_KEYS=(versionFile tagPrefix releaseBuildCommand artifacts plansDir)
 _PREL_CONFIG_TYPES=(text text text list text)
 _PREL_CONFIG_DEFAULTS=(VERSION v "" "" docs/plans)
 
-# The old git config keys, by the name they had. Read no more - a repository
-# still carrying one is told about it rather than quietly obeying it.
+# The old git config keys, by the name they had, each with the prel.config.json
+# key it became. Read no more - a repository still carrying one is told about it
+# rather than quietly obeying it.
 _PREL_CONFIG_GIT_KEYS=(prel.versionFile prel.tagPrefix prel.buildCommand \
 	prel.artifacts prel.plansDir)
+_PREL_CONFIG_GIT_NEW=(versionFile tagPrefix releaseBuildCommand \
+	artifacts plansDir)
+
+# Keys prel.config.json once had, each with the name it goes by now. A file
+# still setting one is named it rather than left to the unknown-key warning:
+# that one says only that the key is not read, and a release would go out with
+# no build where the file plainly asks for one.
+_PREL_CONFIG_RENAMED_OLD=(buildCommand)
+_PREL_CONFIG_RENAMED_NEW=(releaseBuildCommand)
 
 _prel_config_path() {
 	local root
@@ -149,8 +159,12 @@ _prel_config_check() {
 			return 2
 		fi
 
+		# A renamed key is one prel does not read either, and is taken out of
+		# the unknown ones so that it can be answered with the name it has now
+		# instead of with the whole key set.
 		mapfile -t unknown < <(printf '%s' "$json" | jq -r \
-			--argjson known "$(printf '%s\n' "${_PREL_CONFIG_KEYS[@]}" | jq -R . | jq -s .)" \
+			--argjson known "$(printf '%s\n' "${_PREL_CONFIG_KEYS[@]}" \
+				"${_PREL_CONFIG_RENAMED_OLD[@]}" | jq -R . | jq -s .)" \
 			'keys_unsorted - $known | .[]' 2>/dev/null)
 		if [ ${#unknown[@]} -gt 0 ]; then
 			echo "Warning: $file sets keys prel does not read:" >&2
@@ -158,6 +172,17 @@ _prel_config_check() {
 			echo "         prel reads: ${_PREL_CONFIG_KEYS[*]}" >&2
 			rc=1
 		fi
+
+		local old new
+		for i in "${!_PREL_CONFIG_RENAMED_OLD[@]}"; do
+			old="${_PREL_CONFIG_RENAMED_OLD[$i]}"
+			new="${_PREL_CONFIG_RENAMED_NEW[$i]}"
+			printf '%s' "$json" | jq -e --arg k "$old" \
+				'has($k) and .[$k] != null' >/dev/null 2>&1 || continue
+			echo "Warning: $file: \"$old\" is now called" >&2
+			echo "         \"$new\" and is read no more; rename the key to keep it" >&2
+			[ "$rc" = "0" ] && rc=1
+		done
 
 		local actual
 		for i in "${!_PREL_CONFIG_KEYS[@]}"; do
@@ -184,11 +209,12 @@ _prel_config_check() {
 	# a prel that no longer looks there, and silence would be indistinguishable
 	# from it still working.
 	local git_key value
-	for git_key in "${_PREL_CONFIG_GIT_KEYS[@]}"; do
+	for i in "${!_PREL_CONFIG_GIT_KEYS[@]}"; do
+		git_key="${_PREL_CONFIG_GIT_KEYS[$i]}"
 		value=$(git config --get "$git_key" 2>/dev/null) || continue
 		echo "Warning: $git_key is set in git config and is read no more:" >&2
 		echo "         $git_key=$value" >&2
-		echo "         move it to prel.config.json as \"${git_key#prel.}\", then" >&2
+		echo "         move it to prel.config.json as \"${_PREL_CONFIG_GIT_NEW[$i]}\", then" >&2
 		echo "         'git config --unset $git_key'" >&2
 		[ "$rc" = "0" ] && rc=1
 	done
@@ -238,7 +264,7 @@ Description:
     {
       "versionFile": "VERSION",
       "tagPrefix": "v",
-      "buildCommand": "packaging/build-deb.sh ${version}",
+      "releaseBuildCommand": "packaging/build-deb.sh ${version}",
       "artifacts": ["build/prel_${version}_all.deb"],
       "plansDir": "docs/plans"
     }
@@ -246,14 +272,15 @@ Description:
   Every key is optional and the file itself is optional; a repository with
   none takes the defaults this command prints. The keys are:
 
-    versionFile   where the version is, for 'prel release'   (VERSION)
-    tagPrefix     what goes in front of the tag; "" for none (v)
-    buildCommand  the shell command that builds the release artifacts
-    artifacts     the globs to attach to the release, an array, or one
-                  string of them separated by spaces
-    plansDir      where 'prel issue-from-plans' looks for plans (docs/plans)
+    versionFile          where the version is, for 'prel release'   (VERSION)
+    tagPrefix            what goes in front of the tag; "" for none (v)
+    releaseBuildCommand  the shell command that builds the release artifacts
+    artifacts            the globs to attach to the release, an array, or one
+                         string of them separated by spaces
+    plansDir             where 'prel issue-from-plans' looks for plans
+                         (docs/plans)
 
-  ${version} and ${tag} in buildCommand and artifacts are filled in by
+  ${version} and ${tag} in releaseBuildCommand and artifacts are filled in by
   'prel release' - see 'prel release usage'.
 
   Reading the file needs jq, and nothing else about prel does: a repository
@@ -282,9 +309,9 @@ USAGE
 	file=$(_prel_config_name)
 
 	if _prel_config_exists; then
-		echo "file:         $file"
+		printf '%-21s %s\n' "file:" "$file"
 	else
-		echo "file:         none ($file is not there; every setting is a default)"
+		printf '%-21s %s\n' "file:" "none ($file is not there; every setting is a default)"
 	fi
 
 	# First, so that nothing below prints a value out of a file whose shape
@@ -304,17 +331,17 @@ USAGE
 		default="${_PREL_CONFIG_DEFAULTS[$i]}"
 		if [ "$type" = "list" ]; then
 			if mapfile -t list < <(_prel_config_list "$key") && [ ${#list[@]} -gt 0 ]; then
-				printf '%-13s %s\n' "$key:" "$(_prel_list_line "${list[@]}")"
-				[ ${#list[@]} -gt 1 ] && printf '%-13s (%d patterns)\n' "" "${#list[@]}"
+				printf '%-21s %s\n' "$key:" "$(_prel_list_line "${list[@]}")"
+				[ ${#list[@]} -gt 1 ] && printf '%-21s (%d patterns)\n' "" "${#list[@]}"
 			else
-				printf '%-13s %s\n' "$key:" "none (default)"
+				printf '%-21s %s\n' "$key:" "none (default)"
 			fi
 			continue
 		fi
 		value=$(_prel_config_get "$key")
 		case $? in
-			0) printf '%-13s %s\n' "$key:" "${value:-\"\" (empty, set on purpose)}" ;;
-			1) printf '%-13s %s\n' "$key:" "${default:-none} (default)" ;;
+			0) printf '%-21s %s\n' "$key:" "${value:-\"\" (empty, set on purpose)}" ;;
+			1) printf '%-21s %s\n' "$key:" "${default:-none} (default)" ;;
 			*) rc=2 ;;
 		esac
 	done

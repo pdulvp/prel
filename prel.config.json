@@ -1,4 +1,4 @@
 {
-  "buildCommand": "packaging/build-deb.sh ${version}",
+  "releaseBuildCommand": "packaging/build-deb.sh ${version}",
   "artifacts": ["build/prel_${version}_all.deb"]
 }

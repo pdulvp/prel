@@ -49,7 +49,7 @@ travel with the clone instead of being set once per machine by hand.
 {
   "versionFile": "VERSION",
   "tagPrefix": "v",
-  "buildCommand": "packaging/build-deb.sh ${version}",
+  "releaseBuildCommand": "packaging/build-deb.sh ${version}",
   "artifacts": ["build/prel_${version}_all.deb"],
   "plansDir": "docs/plans"
 }
@@ -62,13 +62,18 @@ defaults in the table below, which is most of them.
 | --- | --- | --- |
 | `versionFile` | where the version is, for `prel release` | `VERSION` |
 | `tagPrefix` | what goes in front of the tag; `""` for none | `v` |
-| `buildCommand` | the shell command that builds the release artifacts | none |
+| `releaseBuildCommand` | the shell command that builds the release artifacts | none |
 | `artifacts` | the globs to attach to the release | none |
 | `plansDir` | where `prel issue-from-plans` looks for plans | `docs/plans` |
 
 `prel config` prints the settings as prel reads them, marks the ones that are
 defaults, and reports anything wrong with the file - including a key prel does
 not know, which is a typo that would otherwise do nothing quietly.
+
+`releaseBuildCommand` was called `buildCommand` when the file was introduced.
+A file still setting the old name is told so by name rather than left to the
+unknown-key warning: the build it asks for is the one a release would
+otherwise go out without.
 
 Reading the file needs `jq`, and nothing else about prel does; the `.deb` has
 it as `Recommends` for that reason. A repository with no `prel.config.json`
@@ -303,12 +308,12 @@ Show the settings this repository gives prel, and where they come from.
 
 ```console
 $ prel config
-file:         prel.config.json
-versionFile:  VERSION (default)
-tagPrefix:    v (default)
-buildCommand: packaging/build-deb.sh ${version}
-artifacts:    build/prel_${version}_all.deb
-plansDir:     docs/plans (default)
+file:                 prel.config.json
+versionFile:          VERSION (default)
+tagPrefix:            v (default)
+releaseBuildCommand:  packaging/build-deb.sh ${version}
+artifacts:            build/prel_${version}_all.deb
+plansDir:             docs/plans (default)
 
 prel config: nothing to report
 ```
@@ -327,6 +332,48 @@ before it writes anything, and refuses on a `2`.
 
 A `prel.*` git config key left over from the versions that read them is a
 warning here, naming the key and the JSON it should become.
+
+### prel build
+Run the build a release would run, without releasing anything.
+
+```bash
+prel build usage                  # Show help
+prel build                        # Build at the version the version file reads
+prel build 1.0.1                  # Build at a version not yet in the file
+prel build -n                     # Show what would run, run nothing
+```
+
+`releaseBuildCommand` is the command `prel release` runs between the tag and
+the push. `prel build` runs that same command and stops there - nothing
+committed, tagged, pushed or published - so the build a release will depend on
+can be tried as often as it takes, rather than first running on the release
+itself:
+
+```console
+$ prel build
+build:        packaging/build-deb.sh ${version}
+version:      0.2.3 (from VERSION)
+tag:          v0.2.3
+
+Built build/prel_0.2.3_all.deb (0.2.3, given)
+
+artifacts:
+  build/prel_0.2.3_all.deb
+
+prel build: 0.2.3 built
+```
+
+The command runs from the repository root, with `$version` set to the version
+being built and `$tag` to the tag it would get - the same two a release gives
+it, which is how `"packaging/build-deb.sh ${version}"` knows what it is
+building. The version is the one in the version file as it stands, or the one
+given: `prel build 1.0.1` builds what `prel release 1.0.1` would build.
+
+The exit status is the build's own, so a script can gate on it. Where
+`artifacts` is set, what its patterns match is printed after a build that
+worked - as a report, not a verdict: `prel release artifacts` is the one that
+exits non-zero over a pattern that matched nothing. A project with no
+`releaseBuildCommand` has no build to run, which `prel build` says and exits 0.
 
 ### prel release
 Move the VERSION file on, tag it, push it and publish the release.
@@ -354,7 +401,7 @@ public. Eight steps, stopping at the first that fails:
 1. write `1.0.1` into the `VERSION` file
 2. commit that file alone
 3. tag the commit, annotated, as `v1.0.1`
-4. build the artifacts, where `buildCommand` says how
+4. build the artifacts, where `releaseBuildCommand` says how
 5. push the branch and the tag
 6. create the GitHub release, its notes the commits since the last tag
 7. upload the artifacts in `artifacts`, then take the release out of draft
@@ -370,7 +417,7 @@ has not asked for them in its [`prel.config.json`](#configuring):
 
 ```json
 {
-  "buildCommand": "cmake --build build --target release",
+  "releaseBuildCommand": "cmake --build build --target release",
   "artifacts": ["build/*.deb", "build-win/*.zip"]
 }
 ```
@@ -391,8 +438,8 @@ time alongside this one:
 `${version}` is the version being released, `1.0.1`, and `${tag}` the tag it
 gets, `v1.0.1`; the bare `$version` and `$tag` work too. No shell is involved:
 they are filled in by plain string replacement, so a pattern becomes a filename
-and nothing in it is allowed to run. `buildCommand` *is* a shell command, and
-sees the same two as `$version` and `$tag`.
+and nothing in it is allowed to run. `releaseBuildCommand` *is* a shell
+command, and sees the same two as `$version` and `$tag`.
 
 A misspelt name is left as it stands, matches no file and so stops the release
 before the push, naming the two it knows. Attempting a release is a poor way to
@@ -438,6 +485,10 @@ dropped connection can be finished by running the upload again.
 `--no-build` uploads the artifacts as they already are on disk, for a build
 done by hand or by CI. `--no-assets` skips both steps, and `--no-release`
 implies it - with nowhere to upload to, the build would be work for nothing.
+
+The build itself is worth trying before a release leans on it, which is what
+[`prel build`](#prel-build) is for: the same command, from the same directory,
+with the same `$version` and `$tag`, and no commit or tag around it.
 
 #### Release milestones
 
@@ -589,10 +640,13 @@ Scripts can also be run directly from the `scripts/` directory:
 /mnt/Data/Works/prel/scripts/init-skills.sh register
 /mnt/Data/Works/prel/scripts/init-memory.sh register
 /mnt/Data/Works/prel/scripts/init.sh status
+/mnt/Data/Works/prel/scripts/build.sh
 ```
 
-`scripts/init.sh` drives the other commands, so run directly it loads its
-siblings from the same directory first.
+A script that uses another's functions loads it from the same directory first
+when it is run directly, since only `prel.sh` sources them all: `init.sh`
+drives the other commands, `build.sh` and `release.sh` share the config reader
+and the build runner.
 
 ## Packaging
 
@@ -610,9 +664,11 @@ package has nothing those would do for it. There is no apt repository: the
 `.deb` goes on the release page and is installed by hand.
 
 It is in `packaging/` rather than `scripts/` on purpose. `prel.sh` sources
-every `scripts/*.sh` and turns it into a command, so a build script there
-would ship a `prel build-deb` to everyone who installs the package - a command
-about prel's own clone, in the hands of people who do not have one.
+every `scripts/*.sh` and turns it into a command, so this script there would
+ship a `prel build-deb` to everyone who installs the package - a command about
+prel's own clone, in the hands of people who do not have one. In a clone it is
+`prel build` that runs it, through prel's own `releaseBuildCommand`; run in
+another repository, the same command builds whatever that one's config names.
 
 The payload is named file by file in the script, a whitelist rather than a
 blacklist: a top-level directory added to the repository later has to be named
@@ -627,7 +683,7 @@ would install cleanly and then refuse to run.
 
 ```json
 {
-  "buildCommand": "packaging/build-deb.sh ${version}",
+  "releaseBuildCommand": "packaging/build-deb.sh ${version}",
   "artifacts": ["build/prel_${version}_all.deb"]
 }
 ```
@@ -662,8 +718,8 @@ anyway.
 Read from the repository being worked on, not from prel:
 
 - `prel.config.json` - the settings prel reads there: `versionFile`,
-  `tagPrefix`, `buildCommand`, `artifacts` and `plansDir`, every one of them
-  optional and the file with them. See [Configuring](#configuring), and
+  `tagPrefix`, `releaseBuildCommand`, `artifacts` and `plansDir`, every one of
+  them optional and the file with them. See [Configuring](#configuring), and
   `prel config` for what it resolves to
 - `VERSION` - the three numbers `prel release` moves on, or the path in
   `versionFile`

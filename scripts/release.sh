@@ -33,9 +33,11 @@ _rel_tag_prefix() {
 }
 
 # The command that builds the release artifacts, run from the repository root.
-# Unset in most projects, where a release is the tag and nothing else.
+# Unset in most projects, where a release is the tag and nothing else. 'prel
+# build' runs it on its own, which is how it gets tried before a release
+# depends on it.
 _rel_build_command() {
-	_prel_config_text buildCommand ""
+	_prel_config_text releaseBuildCommand ""
 }
 
 # The artifacts to attach to the release, as globs read from the repository
@@ -528,7 +530,7 @@ Description:
     1. write <x.y.z> into the VERSION file
     2. commit that file alone
     3. tag the commit, annotated, as v<x.y.z>
-    4. build the artifacts, where buildCommand says how
+    4. build the artifacts, where releaseBuildCommand says how
     5. push the branch and the tag
     6. create the GitHub release, its notes the commits since the last tag
     7. upload the artifacts the artifacts setting names, then take the
@@ -540,7 +542,7 @@ Description:
   prel.config.json:
 
     {
-      "buildCommand": "cmake --build build --target release",
+      "releaseBuildCommand": "cmake --build build --target release",
       "artifacts": ["build/*.deb", "build-win/*.zip"]
     }
 
@@ -553,9 +555,9 @@ Description:
   every release ever built: \${version} is the version and \${tag} the tag, as
   in "build/myapp-\${version}.deb". No shell is involved in a pattern - the two
   names are filled in by plain string replacement, and nothing else in it can
-  run. buildCommand is a shell command, and sees the same two as \$version and
-  \$tag. One artifacts entry is one pattern, so a path with a space in it is
-  as expressible as any other.
+  run. releaseBuildCommand is a shell command, and sees the same two as
+  \$version and \$tag. One artifacts entry is one pattern, so a path with a
+  space in it is as expressible as any other.
 
   Step 8 reads the issues out of the commit subjects: 'prel issue-from-plans'
   puts '#<n> ' in front of each one, so the range that writes the notes names
@@ -761,7 +763,7 @@ EOF
 	if [ "$build" = "1" ]; then
 		echo "build:        $build_command"
 	elif [ -n "$build_command" ]; then
-		echo "build:        nothing, buildCommand not run"
+		echo "build:        nothing, releaseBuildCommand not run"
 	fi
 	if [ "$assets" = "1" ]; then
 		echo "artifacts:    $(_prel_list_line "${patterns[@]}")"
@@ -891,10 +893,10 @@ EOF
 	if [ "$build" = "1" ]; then
 		echo ""
 		echo "build: $build_command"
-		# In a subshell of this function, so the build command can read
-		# $version and $tag - the two names artifacts fills in - as the
-		# shell variables they are here. Documented, so keep them named so.
-		if ! ( cd "$REPO_ROOT" && eval "$build_command" ); then
+		# Through build.sh, which is where 'prel build' runs it too: the
+		# command sees $version and $tag as shell variables, and that being
+		# documented is reason enough for the two not to expand it each.
+		if ! _prel_build_eval "$version" "$tag" "$build_command"; then
 			echo ""
 			echo "Error: the build failed, so there is no release to make" >&2
 			_rel_undo_and_report "$tag" "$version_file" "$backup" "$current"
@@ -1013,7 +1015,9 @@ EOF
 # has to load it itself - sourcing it only defines its functions.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	_rel_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	# shellcheck source=/dev/null
-	[ -r "$_rel_dir/config.sh" ] && source "$_rel_dir/config.sh"
+	for _rel_sibling in config.sh build.sh; do
+		# shellcheck source=/dev/null
+		[ -r "$_rel_dir/$_rel_sibling" ] && source "$_rel_dir/$_rel_sibling"
+	done
 	release "$@"
 fi
