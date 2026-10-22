@@ -23,6 +23,11 @@ PKG_HOMEPAGE="https://github.com/pdulvp/prel"
 # The payload, named one by one. A whitelist rather than a blacklist: a
 # top-level directory added to the repository later has to be named here
 # before it ships, instead of shipping the day it appears.
+#
+# prel.config.json is deliberately not in it. It is the configuration of
+# prel-the-repository - its own build command, its own artifacts - and an
+# installed prel reads the prel.config.json of whatever repository it is run
+# in. Shipped under /usr/share it would be a set of settings nobody asked for.
 PAYLOAD=(
 	prel.sh
 	scripts
@@ -123,6 +128,18 @@ main() {
 		cp -a "$item" "$stage/usr/share/${PKG_NAME}/"
 	done
 
+	# The whitelist above leaves prel.config.json out by construction; this is
+	# what says so out loud if it ever drifts in, here or inside one of the
+	# directories that are shipped.
+	local strays
+	strays=$(find "$stage" -name 'prel.config.json' -printf '%P\n' 2>/dev/null)
+	if [ -n "$strays" ]; then
+		echo "Error: prel.config.json is in the payload and must not be packaged:" >&2
+		printf '       %s\n' "$strays" >&2
+		echo "       it is this repository's own configuration, not a default" >&2
+		return 1
+	fi
+
 	# Relative, so the link is correct under a dpkg --instdir or inside a
 	# chroot as well as at /.
 	ln -s "../share/${PKG_NAME}/prel.sh" "$stage/usr/bin/${PKG_NAME}"
@@ -143,9 +160,10 @@ main() {
 	find "$stage" -type f -perm /u+x -exec chmod 0755 {} +
 	find "$stage" -type f ! -perm /u+x -exec chmod 0644 {} +
 
-	# gh is Recommends, not Depends: only 'prel release' and
-	# 'prel issue-from-plans' reach for it, and the rest of prel is useful on
-	# a machine that has never heard of GitHub.
+	# gh and jq are Recommends, not Depends: only 'prel release' and
+	# 'prel issue-from-plans' reach for gh, and the rest of prel is useful on
+	# a machine that has never heard of GitHub. jq reads prel.config.json, and
+	# a repository with no such file - most of them - never needs it.
 	cat > "$stage/DEBIAN/control" <<EOF
 Package: ${PKG_NAME}
 Version: ${version}
@@ -153,7 +171,7 @@ Section: vcs
 Priority: optional
 Architecture: all
 Depends: bash (>= 4.0), git, coreutils
-Recommends: gh
+Recommends: gh, jq
 Maintainer: ${PKG_MAINTAINER}
 Homepage: ${PKG_HOMEPAGE}
 Description: Git management toolkit for commit attribution and hooks

@@ -14,13 +14,20 @@ issues() {
 	issue_from_plans "$@"
 }
 
-# Where the plans live. A repository that keeps them elsewhere sets
-# prel.plansDir in its own git config.
+# Whether the config can be read at all. Warnings pass - a stale git config
+# key does not stop anything - and only a file that cannot be made sense of
+# fails, since plansDir would then have to be guessed at.
+_ifp_config_ok() {
+	local rc
+	_prel_config_check >/dev/null 2>&1
+	rc=$?
+	[ "$rc" -le 1 ]
+}
+
+# Where the plans live. A repository that keeps them elsewhere sets plansDir
+# in its prel.config.json - see 'prel config'.
 _ifp_plans_dir() {
-	local dir
-	dir=$(git config --get prel.plansDir 2>/dev/null) || dir=""
-	[ -n "$dir" ] || dir="docs/plans"
-	printf '%s\n' "$dir"
+	_prel_config_text plansDir docs/plans
 }
 
 # The issue created for a commit that has not been made yet. Lives in .git so
@@ -561,8 +568,8 @@ Description:
   the comment character - the subject included. Where the setting is missing,
   nothing is filed and the reason is printed.
 
-  The plans are read from docs/plans, or from the path in the prel.plansDir git
-  config of the repository.
+  The plans are read from docs/plans, or from the plansDir of the
+  repository's prel.config.json.
 EOF
 		return 0
 	fi
@@ -573,6 +580,25 @@ EOF
 		return 1
 	fi
 	cd "$REPO_ROOT"
+
+	# A prel.config.json that cannot be read is where plansDir would have to
+	# be guessed at, so nothing goes looking. Asked by hand the whole
+	# diagnosis is printed; from a hook it is one line and a pointer, because
+	# nothing here may stop a commit and hook output is read in passing.
+	case "$action" in
+		status|dry-run|dry_run|-n)
+			if ! _prel_config_ok_verbose; then
+				return 1
+			fi
+			;;
+		prepare-msg|subject|stamp)
+			if ! _ifp_config_ok; then
+				echo "prel: prel.config.json cannot be read, so no issue was filed" >&2
+				echo "prel: 'prel config' says why" >&2
+				return 0
+			fi
+			;;
+	esac
 
 	case "$action" in
 		status)
@@ -600,7 +626,12 @@ EOF
 	esac
 }
 
-# If this script is run directly (not sourced), call the function
+# If this script is run directly (not sourced), call the function. The git
+# hooks run it this way rather than through prel.sh, so the shared config
+# reader has to be loaded here: sourcing it only defines its functions.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	_ifp_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# shellcheck source=/dev/null
+	[ -r "$_ifp_dir/config.sh" ] && source "$_ifp_dir/config.sh"
 	issue_from_plans "$@"
 fi

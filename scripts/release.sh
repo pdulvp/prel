@@ -9,39 +9,48 @@
 # form there is: the file is what the build reads, so moving it on, tagging that
 # commit and publishing the tag is the whole of a release.
 
-# Which file carries the version. A project keeping it elsewhere sets
-# prel.versionFile in its own git config.
+# The four settings a release reads, all of them out of prel.config.json -
+# see 'prel config'. Each takes its default where the file is silent, and
+# fails loudly where the file is there and cannot be read: a release that
+# quietly took every default would tag the wrong file and upload nothing.
+
+# Which file carries the version.
 _rel_version_file() {
-	local file
-	file=$(git config --get prel.versionFile 2>/dev/null) || file=""
-	[ -n "$file" ] || file="VERSION"
-	printf '%s\n' "$file"
+	_prel_config_text versionFile VERSION
 }
 
 # What the tag is called. Projects differ on the leading 'v', so it is a
-# setting; prel.tagPrefix set to an empty string gives a bare 1.0.1.
+# setting; "tagPrefix": "" gives a bare 1.0.1, which is why an empty value set
+# on purpose has to be told from no value at all.
 _rel_tag_prefix() {
-	if git config --get prel.tagPrefix >/dev/null 2>&1; then
-		git config --get prel.tagPrefix
-	else
-		printf 'v\n'
-	fi
+	local prefix
+	prefix=$(_prel_config_get tagPrefix)
+	case $? in
+		0) printf '%s\n' "$prefix" ;;
+		1) printf 'v\n' ;;
+		*) return 2 ;;
+	esac
 }
 
 # The command that builds the release artifacts, run from the repository root.
 # Unset in most projects, where a release is the tag and nothing else.
 _rel_build_command() {
-	git config --get prel.buildCommand 2>/dev/null || true
+	_prel_config_text buildCommand ""
 }
 
-# The artifacts to attach to the release, as whitespace-separated globs read
-# from the repository root: "build/*.deb build-win/*.zip". A list of patterns
-# cannot also hold paths with spaces in them; that is the trade made here.
-_rel_artifacts_spec() {
-	git config --get prel.artifacts 2>/dev/null || true
+# The artifacts to attach to the release, as globs read from the repository
+# root. _REL_PATTERNS comes back holding one pattern an element - an array in
+# the file stays one entry a pattern, so a path with a space in it is as
+# expressible as any other, which the whitespace-separated string it replaces
+# could never manage.
+_rel_artifacts() {
+	_REL_PATTERNS=()
+	mapfile -t _REL_PATTERNS < <(_prel_config_list artifacts)
+	return 0
 }
 
-# Fill in the placeholders a prel.artifacts pattern may carry: ${version} is
+
+# Fill in the placeholders an artifacts pattern may carry: ${version} is
 # the version being released and ${tag} the tag it gets, braced or bare. Plain
 # string replacement rather than eval - a pattern becomes a filename, and must
 # not be able to run a command on the way to becoming one. The braced forms go
@@ -65,7 +74,7 @@ _rel_placeholder_hint() {
 		case "$pattern" in
 			*'$'*)
 				echo "${indent}a \$ left in a pattern is a name that was not filled in;"
-				echo "${indent}prel.artifacts knows \${version} and \${tag} only"
+				echo "${indent}artifacts knows \${version} and \${tag} only"
 				return 0
 				;;
 		esac
@@ -290,28 +299,30 @@ _rel_milestone_apply() {
 # any pattern did. Only regular files count: a pattern matching a directory
 # alone has not found the file it was written for.
 #
-# Each pattern has its placeholders filled in before it is expanded, so a spec
-# can name the release it is for instead of globbing over every release ever
+# Each pattern has its placeholders filled in before it is expanded, so a
+# pattern can name the release it is for instead of globbing over every release ever
 # built. _REL_RESOLVED comes back holding "pattern -> resolved" for the ones
 # that changed, which is what the dry run shows.
 #
 # An unmatched pattern is the failure worth stopping on. It is how a release
 # ends up published without the Windows zip nobody noticed was missing.
 _rel_expand_artifacts() {
-	local spec="$1" version="$2" tag="$3"
+	local version="$1" tag="$2"
+	shift 2
 	local pattern resolved candidate nullglob_was_set
-	local -a patterns matches
+	local -a patterns=("$@") matches
 	_REL_ASSETS=()
 	_REL_MISSING=()
 	_REL_RESOLVED=()
 
-	# Split the list first, and with 'read' rather than word splitting, so that
-	# nullglob below cannot make a pattern matching nothing disappear before it
-	# has been reported as matching nothing.
-	read -ra patterns <<< "$spec"
-
 	shopt -q nullglob && nullglob_was_set=1 || nullglob_was_set=0
 	shopt -s nullglob
+	# No word splitting while the patterns are expanded: one entry is one
+	# pattern, and a path with a space in it would otherwise be split into two
+	# names that match nothing. Pathname expansion still yields one field per
+	# file it matches, which is the part being asked for.
+	local ifs_was="$IFS"
+	IFS=''
 	for pattern in "${patterns[@]}"; do
 		resolved=$(_rel_substitute_artifact_vars "$pattern" "$version" "$tag")
 		[ "$resolved" = "$pattern" ] || _REL_RESOLVED+=("$pattern -> $resolved")
@@ -326,6 +337,7 @@ _rel_expand_artifacts() {
 			_REL_ASSETS+=("${matches[@]}")
 		fi
 	done
+	IFS="$ifs_was"
 	[ "$nullglob_was_set" = "1" ] || shopt -u nullglob
 
 	[ ${#_REL_MISSING[@]} -eq 0 ]
@@ -368,13 +380,14 @@ _rel_undo_and_report() {
 	rm -f "$backup"
 }
 
-# 'prel release artifacts': what prel.artifacts matches as the tree stands,
+# 'prel release artifacts': what the artifacts of prel.config.json match as
+# the tree stands,
 # and nothing besides. None of the release preconditions are checked here -
 # the question is about files on disk, so answering it must not want a free
 # tag, a remote, or a usable gh. Non-zero where a pattern matched nothing, so
 # a build script can gate on it.
 _rel_check_artifacts() {
-	local version="" origin="" repo_root version_file spec tag build_command
+	local version="" origin="" repo_root version_file tag build_command
 	local rc=0
 
 	while [ $# -gt 0 ]; do
@@ -402,12 +415,17 @@ _rel_check_artifacts() {
 	fi
 	cd "$repo_root" || return 1
 
+	# A config worth reporting on before it is read for an answer.
+	_prel_config_ok_verbose || return 1
+
 	# The patterns first: with none set, the version they would have been
 	# filled in with is beside the point, and so is a missing version file.
-	spec=$(_rel_artifacts_spec)
-	if [ -z "$spec" ]; then
-		echo "prel.artifacts is not set: a release here is the tag and nothing else."
-		echo 'Set it with, say:  git config prel.artifacts '"'"'build/myapp-${version}.deb'"'"
+	_rel_artifacts || return 1
+	if [ ${#_REL_PATTERNS[@]} -eq 0 ]; then
+		echo "artifacts is not set in prel.config.json: a release here is the tag"
+		echo "and nothing else. Set it with, say:"
+		echo ""
+		echo '  { "artifacts": ["build/myapp-${version}.deb"] }'
 		return 0
 	fi
 
@@ -437,12 +455,15 @@ _rel_check_artifacts() {
 	fi
 
 	tag="$(_rel_tag_prefix)$version"
-	echo "artifacts: $spec"
+	echo "artifacts: $(_prel_list_line "${_REL_PATTERNS[@]}")"
 	echo "version:   $version ($origin)"
 	echo "tag:       $tag"
 	echo ""
 
-	_rel_expand_artifacts "$spec" "$version" "$tag"
+	# Copied aside: the expansion writes its answers into _REL_* arrays, and
+	# _REL_PATTERNS is where it reads the patterns from.
+	local -a patterns=("${_REL_PATTERNS[@]}")
+	_rel_expand_artifacts "$version" "$tag" "${patterns[@]}"
 	rc=$?
 
 	if [ ${#_REL_RESOLVED[@]} -gt 0 ]; then
@@ -484,7 +505,7 @@ release - Move the VERSION file on, tag it, push it and publish the release
 
 Usage:
   prel release usage              Show this help
-  prel release artifacts          Say what prel.artifacts matches, do nothing
+  prel release artifacts          Say what the artifacts setting matches
   prel release artifacts <x.y.z>  The same, for a version not yet in the file
   prel release <x.y.z>            Bump, commit, tag, push, publish
   prel release <x.y.z> -n         Show every step, change nothing
@@ -507,29 +528,34 @@ Description:
     1. write <x.y.z> into the VERSION file
     2. commit that file alone
     3. tag the commit, annotated, as v<x.y.z>
-    4. build the artifacts, where prel.buildCommand says how
+    4. build the artifacts, where buildCommand says how
     5. push the branch and the tag
     6. create the GitHub release, its notes the commits since the last tag
-    7. upload the artifacts in prel.artifacts, then take the release out of
-       draft now that it has them
+    7. upload the artifacts the artifacts setting names, then take the
+       release out of draft now that it has them
     8. put the issues these commits fixed on a milestone named after the tag,
        creating it if it is not there, and close them and it
 
-  Steps 4 and 7 happen only in a project that has asked for them:
+  Steps 4 and 7 happen only in a project that has asked for them, in its
+  prel.config.json:
 
-    git config prel.buildCommand "cmake --build build --target release"
-    git config prel.artifacts "build/*.deb build-win/*.zip"
+    {
+      "buildCommand": "cmake --build build --target release",
+      "artifacts": ["build/*.deb", "build-win/*.zip"]
+    }
 
   'prel release artifacts' answers what those patterns match, without any of
   the above: no network, no gh, nothing written, nothing built. The version
   comes from the version file as it stands, or from the argument. It exits
   non-zero where a pattern matched no file, so a build script can gate on it.
 
-  A pattern in prel.artifacts can name the release it is for rather than glob
-  over every release ever built: \${version} is the version and \${tag} the tag,
-  as in 'build/myapp-\${version}.deb'. Single-quote it when setting it, so the
-  shell leaves the name for prel to fill in. prel.buildCommand is a shell
-  command and sees the same two as \$version and \$tag.
+  A pattern in artifacts can name the release it is for rather than glob over
+  every release ever built: \${version} is the version and \${tag} the tag, as
+  in "build/myapp-\${version}.deb". No shell is involved in a pattern - the two
+  names are filled in by plain string replacement, and nothing else in it can
+  run. buildCommand is a shell command, and sees the same two as \$version and
+  \$tag. One artifacts entry is one pattern, so a path with a space in it is
+  as expressible as any other.
 
   Step 8 reads the issues out of the commit subjects: 'prel issue-from-plans'
   puts '#<n> ' in front of each one, so the range that writes the notes names
@@ -559,8 +585,9 @@ Description:
   them exactly where they were; -y answers yes in advance and no terminal to
   ask on is an answer of no.
 
-  The tag is v<x.y.z>, or the version alone where prel.tagPrefix is set to an
-  empty string. The file is VERSION, or the path in prel.versionFile. The
+  The tag is v<x.y.z>, or the version alone where tagPrefix is set to an
+  empty string. The file is VERSION, or the path in versionFile. All four of
+  these settings are read from prel.config.json - see 'prel config'. The
   release commit is made with PREL_SKIP_ISSUE set, so it never consumes the
   sum-up that 'prel issue-from-plans' is holding for the next real commit.
 EOF
@@ -625,11 +652,21 @@ EOF
 	fi
 	cd "$REPO_ROOT"
 
+	# Before a word of it is believed. A key prel does not know or a value of
+	# the wrong shape stops the release here, where nothing has happened yet -
+	# the shape of this file is known, unlike git config, where any key was a
+	# valid key. A stale prel.* git config key is a warning and passes.
+	if ! _prel_config_ok_verbose; then
+		echo "Error: prel.config.json is not usable, so nothing was released" >&2
+		return 1
+	fi
+
 	local version_file current
 	version_file=$(_rel_version_file)
 	if [ ! -f "$version_file" ]; then
 		echo "Error: no $version_file in $REPO_ROOT, nothing to release" >&2
-		echo "       a project keeping its version elsewhere sets prel.versionFile" >&2
+		echo "       a project keeping its version elsewhere sets versionFile" >&2
+		echo "       in prel.config.json" >&2
 		return 1
 	fi
 	current=$(tr -d '[:space:]' < "$version_file")
@@ -686,11 +723,12 @@ EOF
 	# What the project asked for, and what the options make of it. Nothing to
 	# upload to means nothing worth building, so --no-release and --no-assets
 	# both take the build down with them.
-	local build_command artifacts_spec build=0 assets=0
+	local build_command build=0 assets=0
 	build_command=$(_rel_build_command)
-	artifacts_spec=$(_rel_artifacts_spec)
+	_rel_artifacts || return 1
+	local -a patterns=("${_REL_PATTERNS[@]}")
 	[ -n "$build_command" ] && build=1
-	[ -n "$artifacts_spec" ] && assets=1
+	[ ${#patterns[@]} -gt 0 ] && assets=1
 	[ "$no_build" = "1" ] && build=0
 	if [ "$no_assets" = "1" ] || [ "$publish" = "0" ]; then
 		assets=0
@@ -723,12 +761,12 @@ EOF
 	if [ "$build" = "1" ]; then
 		echo "build:        $build_command"
 	elif [ -n "$build_command" ]; then
-		echo "build:        nothing, prel.buildCommand not run"
+		echo "build:        nothing, buildCommand not run"
 	fi
 	if [ "$assets" = "1" ]; then
-		echo "artifacts:    $artifacts_spec"
-	elif [ -n "$artifacts_spec" ]; then
-		echo "artifacts:    nothing, prel.artifacts not uploaded"
+		echo "artifacts:    $(_prel_list_line "${patterns[@]}")"
+	elif [ ${#patterns[@]} -gt 0 ]; then
+		echo "artifacts:    nothing, the artifacts of prel.config.json not uploaded"
 	fi
 	if [ "$publish" != "1" ]; then
 		echo "publish:      nothing, --no-release"
@@ -779,7 +817,7 @@ EOF
 		echo "$version"
 		if [ "$assets" = "1" ]; then
 			echo "--- artifacts ----------------------------------------------------------"
-			_rel_expand_artifacts "$artifacts_spec" "$version" "$tag"
+			_rel_expand_artifacts "$version" "$tag" "${patterns[@]}"
 			if [ ${#_REL_RESOLVED[@]} -gt 0 ]; then
 				echo "filled in:"
 				printf '  %s\n' "${_REL_RESOLVED[@]}"
@@ -854,7 +892,7 @@ EOF
 		echo ""
 		echo "build: $build_command"
 		# In a subshell of this function, so the build command can read
-		# $version and $tag - the two names prel.artifacts fills in - as the
+		# $version and $tag - the two names artifacts fills in - as the
 		# shell variables they are here. Documented, so keep them named so.
 		if ! ( cd "$REPO_ROOT" && eval "$build_command" ); then
 			echo ""
@@ -866,8 +904,8 @@ EOF
 	fi
 
 	if [ "$assets" = "1" ]; then
-		if ! _rel_expand_artifacts "$artifacts_spec" "$version" "$tag"; then
-			echo "Error: these patterns in prel.artifacts matched no file:" >&2
+		if ! _rel_expand_artifacts "$version" "$tag" "${patterns[@]}"; then
+			echo "Error: these artifacts of prel.config.json matched no file:" >&2
 			printf '       %s\n' "${_REL_MISSING[@]}" >&2
 			_rel_placeholder_hint '       ' "${_REL_MISSING[@]}" >&2
 			if [ ${#_REL_ASSETS[@]} -gt 0 ]; then
@@ -970,7 +1008,12 @@ EOF
 	return 0
 }
 
-# If this script is run directly (not sourced), call the function
+# If this script is run directly (not sourced), call the function. Sourced
+# from prel.sh the shared config reader is already loaded; run directly, this
+# has to load it itself - sourcing it only defines its functions.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	_rel_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# shellcheck source=/dev/null
+	[ -r "$_rel_dir/config.sh" ] && source "$_rel_dir/config.sh"
 	release "$@"
 fi

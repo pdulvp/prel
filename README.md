@@ -38,6 +38,53 @@ finds its own tree rather than the directory the link happens to sit in. A
 clone is the better one to work from: the registrations are links back into it,
 so an edit there is live everywhere it is registered, with nothing to reinstall.
 
+## Configuring
+
+The settings prel invented for itself live in `prel.config.json` at the root of
+the repository being worked on. A file rather than git config, so it can be
+committed: the version file, the build command and the artifacts of a project
+travel with the clone instead of being set once per machine by hand.
+
+```json
+{
+  "versionFile": "VERSION",
+  "tagPrefix": "v",
+  "buildCommand": "packaging/build-deb.sh ${version}",
+  "artifacts": ["build/prel_${version}_all.deb"],
+  "plansDir": "docs/plans"
+}
+```
+
+Every key is optional, and so is the file: a repository with none takes the
+defaults in the table below, which is most of them.
+
+| key | what it is | default |
+| --- | --- | --- |
+| `versionFile` | where the version is, for `prel release` | `VERSION` |
+| `tagPrefix` | what goes in front of the tag; `""` for none | `v` |
+| `buildCommand` | the shell command that builds the release artifacts | none |
+| `artifacts` | the globs to attach to the release | none |
+| `plansDir` | where `prel issue-from-plans` looks for plans | `docs/plans` |
+
+`prel config` prints the settings as prel reads them, marks the ones that are
+defaults, and reports anything wrong with the file - including a key prel does
+not know, which is a typo that would otherwise do nothing quietly.
+
+Reading the file needs `jq`, and nothing else about prel does; the `.deb` has
+it as `Recommends` for that reason. A repository with no `prel.config.json`
+never reaches for it. Where the file is there and `jq` is not, prel says so and
+stops rather than taking every setting at its default behind your back - a
+release that quietly forgot its artifacts is the failure worth avoiding.
+
+git's own settings are not in this file. `commit.coauthor`, `core.hooksPath`,
+`commit.cleanup` and `include.path` are read by git itself, or by the
+`configs/.gitconfig-*` includes that `prel switch-author` points at, and stay
+in git config where git looks for them.
+
+Earlier versions of prel read these five as `prel.*` git config keys. They are
+read no more, and a repository still setting one is told about it by name -
+silence there would look exactly like a setting that still works.
+
 ## Commands
 
 ### prel usage
@@ -248,15 +295,45 @@ call: each is reported on stderr, the commit is made without a link, and
 `sumup.md` is left in place for the next attempt. `PREL_SKIP_ISSUE=1 git commit`
 skips the whole thing, and so does `git commit --no-verify`.
 
-Plans are read from `docs/plans`, or from the path in the repository's
-`prel.plansDir` git config.
+Plans are read from `docs/plans`, or from the `plansDir` of the repository's
+[`prel.config.json`](#configuring).
+
+### prel config
+Show the settings this repository gives prel, and where they come from.
+
+```console
+$ prel config
+file:         prel.config.json
+versionFile:  VERSION (default)
+tagPrefix:    v (default)
+buildCommand: packaging/build-deb.sh ${version}
+artifacts:    build/prel_${version}_all.deb
+plansDir:     docs/plans (default)
+
+prel config: nothing to report
+```
+
+The settings and the file they live in are described under
+[Configuring](#configuring). This command is what reads it: every key with its
+value, `(default)` against the ones the file does not set, and `"" (empty, set
+on purpose)` against a `tagPrefix` deliberately emptied to get a bare tag.
+
+What it reports, on stderr, is anything wrong with the file: a key prel does
+not read, named alongside the five it does; a value of the wrong shape; a file
+that is not a JSON object, or one that `jq` is not installed to read. It exits
+`0` where there is nothing to say, `1` where there are warnings and `2` where
+the file cannot be used as it stands - `prel release` runs the same check
+before it writes anything, and refuses on a `2`.
+
+A `prel.*` git config key left over from the versions that read them is a
+warning here, naming the key and the JSON it should become.
 
 ### prel release
 Move the VERSION file on, tag it, push it and publish the release.
 
 ```bash
 prel release usage                # Show help
-prel release artifacts            # Say what prel.artifacts matches, do nothing
+prel release artifacts            # Say what the artifacts setting matches
 prel release artifacts 1.0.1      # The same, for a version not yet in the file
 prel release 1.0.1                # Bump, commit, tag, push, publish
 prel release 1.0.1 -n             # Show every step, change nothing
@@ -277,11 +354,11 @@ public. Eight steps, stopping at the first that fails:
 1. write `1.0.1` into the `VERSION` file
 2. commit that file alone
 3. tag the commit, annotated, as `v1.0.1`
-4. build the artifacts, where `prel.buildCommand` says how
+4. build the artifacts, where `buildCommand` says how
 5. push the branch and the tag
 6. create the GitHub release, its notes the commits since the last tag
-7. upload the artifacts in `prel.artifacts`, then take the release out of
-   draft now that it has them
+7. upload the artifacts in `artifacts`, then take the release out of draft
+   now that it has them
 8. put the issues these commits fixed on a milestone named after the tag, and
    close them and it
 
@@ -289,30 +366,33 @@ public. Eight steps, stopping at the first that fails:
 
 Steps 4 and 7 are there for a project whose build produces files that belong on
 the release - a `.deb`, a Windows `.zip` - and are skipped entirely by one that
-has not asked for them:
+has not asked for them in its [`prel.config.json`](#configuring):
 
-```bash
-git config prel.buildCommand "cmake --build build --target release"
-git config prel.artifacts "build/*.deb build-win/*.zip"
+```json
+{
+  "buildCommand": "cmake --build build --target release",
+  "artifacts": ["build/*.deb", "build-win/*.zip"]
+}
 ```
 
-`prel.artifacts` is a whitespace-separated list of globs read from the
-repository root; paths with spaces in them are not expressible in it.
+`artifacts` is a list of globs read from the repository root. One entry is one
+pattern, so a path with a space in it is as expressible as any other; a single
+string of patterns separated by whitespace is accepted too, which is what the
+git config value it replaces had to be.
 
 A pattern can also name the release it is for, instead of globbing over every
 release ever built - `build/myapp-*.deb` happily uploads the `.deb` from last
 time alongside this one:
 
-```bash
-git config prel.artifacts 'build/myapp-${version}.deb dist/myapp-${tag}.zip'
+```json
+{ "artifacts": ["build/myapp-${version}.deb", "dist/myapp-${tag}.zip"] }
 ```
 
 `${version}` is the version being released, `1.0.1`, and `${tag}` the tag it
-gets, `v1.0.1`; the bare `$version` and `$tag` work too. Set them in **single
-quotes**, so the shell leaves the names for prel to fill in. They are filled in
-by plain string replacement rather than by a shell: a pattern becomes a
-filename, and nothing in it is allowed to run. `prel.buildCommand` *is* a shell
-command, and sees the same two as `$version` and `$tag`.
+gets, `v1.0.1`; the bare `$version` and `$tag` work too. No shell is involved:
+they are filled in by plain string replacement, so a pattern becomes a filename
+and nothing in it is allowed to run. `buildCommand` *is* a shell command, and
+sees the same two as `$version` and `$tag`.
 
 A misspelt name is left as it stands, matches no file and so stops the release
 before the push, naming the two it knows. Attempting a release is a poor way to
@@ -426,8 +506,11 @@ Release 1.0.1 anyway? [y/N]
 `-y` answers yes in advance, and no terminal to ask on is an answer of no - a
 command that pushes and publishes does not take a redirected pipe for consent.
 
-The tag is `v<x.y.z>`, or the version alone where `prel.tagPrefix` is set to an
-empty string. The file is `VERSION`, or the path in `prel.versionFile`. The
+The tag is `v<x.y.z>`, or the version alone where `tagPrefix` is set to an
+empty string. The file is `VERSION`, or the path in `versionFile`. Both are
+read from [`prel.config.json`](#configuring), and a release checks that file
+over before it writes anything: a key prel does not read or a value of the
+wrong shape stops it where nothing has happened yet. The
 release commit is made with `PREL_SKIP_ISSUE` set, so it never spends the issue
 that `prel issue-from-plans` is holding for the next real commit.
 
@@ -539,21 +622,28 @@ installed root-owned under `/usr/share`, that would leave
 `/usr/share/prel/prel.sh` unreadable to every user but root, and the package
 would install cleanly and then refuse to run.
 
-`prel release` builds and attaches it through the two settings every project
-configures for itself. They are git config, so they live in `.git/config` and
-cannot be committed - git will not let a tracked file set them - which means
-one clone of prel has them and a fresh clone does not:
+`prel release` builds and attaches it through the two settings in prel's own
+`prel.config.json`, which is committed, so a fresh clone has them:
 
-```bash
-git config prel.buildCommand 'packaging/build-deb.sh ${version}'
-git config prel.artifacts    'build/prel_${version}_all.deb'
+```json
+{
+  "buildCommand": "packaging/build-deb.sh ${version}",
+  "artifacts": ["build/prel_${version}_all.deb"]
+}
 ```
 
-Single quotes both times, so git stores the `${version}` placeholder rather
-than today's version: `prel release` fills it in at release time, which is how
-the build is told which version it is building and how the artifact is found
-once it has. `prel release artifacts` says what they resolve to without
-building anything.
+`${version}` is left as it stands in the file rather than written out as
+today's version: `prel release` fills it in at release time, which is how the
+build is told which version it is building and how the artifact is found once
+it has. `prel release artifacts` says what they resolve to without building
+anything.
+
+That file is **not in the payload**. It is the configuration of
+prel-the-repository, and an installed prel reads the `prel.config.json` of
+whatever repository it is run in - one shipped under `/usr/share/prel` would be
+a set of settings nobody asked for. The whitelist leaves it out by
+construction, and the build fails if it ever turns up in the staged tree
+anyway.
 
 ## Configuration Files
 
@@ -571,14 +661,14 @@ building anything.
 
 Read from the repository being worked on, not from prel:
 
-- `VERSION` - the three numbers `prel release` moves on, or the path in the
-  repository's `prel.versionFile` git config
+- `prel.config.json` - the settings prel reads there: `versionFile`,
+  `tagPrefix`, `buildCommand`, `artifacts` and `plansDir`, every one of them
+  optional and the file with them. See [Configuring](#configuring), and
+  `prel config` for what it resolves to
+- `VERSION` - the three numbers `prel release` moves on, or the path in
+  `versionFile`
 - `docs/plans/` - the work plans `prel issue-from-plans` files, or the path in
-  its `prel.plansDir`
-- `prel.buildCommand` - the command `prel release` runs to build the release
-  artifacts, unset in a project whose release is the tag and nothing else
-- `prel.artifacts` - the globs of the files it then uploads to the release,
-  where `${version}` and `${tag}` stand for the release being made
+  `plansDir`
 
 ## How It Works
 
