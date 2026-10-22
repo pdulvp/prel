@@ -33,9 +33,10 @@ _rel_tag_prefix() {
 }
 
 # The command that builds the release artifacts, run from the repository root.
-# Unset in most projects, where a release is the tag and nothing else. 'prel
-# build' runs it on its own, which is how it gets tried before a release
-# depends on it.
+# Unset in most projects, where a release is the tag and nothing else. Not the
+# buildCommand of 'prel build', which is the ordinary build and no business of
+# a release; 'prel build --release' runs this one on its own, which is how it
+# gets tried before a release depends on it.
 _rel_build_command() {
 	_prel_config_text releaseBuildCommand ""
 }
@@ -390,7 +391,7 @@ _rel_undo_and_report() {
 # a build script can gate on it.
 _rel_check_artifacts() {
 	local version="" origin="" repo_root version_file tag build_command
-	local rc=0
+	local ordinary rc=0
 
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -485,6 +486,13 @@ _rel_check_artifacts() {
 		build_command=$(_rel_build_command)
 		if [ -n "$build_command" ]; then
 			echo "  a release would build them first: $build_command"
+		else
+			ordinary=$(_prel_build_command)
+			if [ -n "$ordinary" ]; then
+				echo "  no releaseBuildCommand: a release builds nothing here. The"
+				echo "  buildCommand this file sets is the build 'prel build' runs,"
+				echo "  and not one a release runs"
+			fi
 		fi
 	fi
 
@@ -545,6 +553,11 @@ Description:
       "releaseBuildCommand": "cmake --build build --target release",
       "artifacts": ["build/*.deb", "build-win/*.zip"]
     }
+
+  releaseBuildCommand is the only build a release runs. buildCommand, the
+  ordinary build of the project, is the one 'prel build' runs and is never
+  run here; 'prel build --release' is how the release build gets tried
+  without a release around it.
 
   'prel release artifacts' answers what those patterns match, without any of
   the above: no network, no gh, nothing written, nothing built. The version
@@ -764,6 +777,18 @@ EOF
 		echo "build:        $build_command"
 	elif [ -n "$build_command" ]; then
 		echo "build:        nothing, releaseBuildCommand not run"
+	else
+		# A project whose config names the ordinary build and no release build
+		# is told which of the two a release reads, here where it is about to
+		# not run one. 0.2.3 called the release build buildCommand, and a
+		# config written then would otherwise release with no build at all.
+		local ordinary
+		ordinary=$(_prel_build_command)
+		if [ -n "$ordinary" ]; then
+			echo "build:        nothing, releaseBuildCommand not set"
+			echo "              (buildCommand is the build 'prel build' runs,"
+			echo "              and not one a release runs)"
+		fi
 	fi
 	if [ "$assets" = "1" ]; then
 		echo "artifacts:    $(_prel_list_line "${patterns[@]}")"

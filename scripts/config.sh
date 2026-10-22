@@ -7,7 +7,7 @@
 #
 # The settings prel invented for itself live in prel.config.json at the
 # repository root, not in .git/config: a file can be committed, so the version
-# file, the build command and the artifacts of a project travel with the clone
+# file, the build commands and the artifacts of a project travel with the clone
 # instead of being set once per machine by hand.
 #
 # git's own settings - commit.coauthor, core.hooksPath, include.path,
@@ -17,24 +17,21 @@
 # Every key prel reads, and what it means where the file says nothing. 'list'
 # is the one array, 'text' the plain strings; the type is what _prel_config_check
 # holds a value against.
-_PREL_CONFIG_KEYS=(versionFile tagPrefix releaseBuildCommand artifacts plansDir)
-_PREL_CONFIG_TYPES=(text text text list text)
-_PREL_CONFIG_DEFAULTS=(VERSION v "" "" docs/plans)
+_PREL_CONFIG_KEYS=(versionFile tagPrefix buildCommand releaseBuildCommand \
+	artifacts plansDir)
+_PREL_CONFIG_TYPES=(text text text text list text)
+_PREL_CONFIG_DEFAULTS=(VERSION v "" "" "" docs/plans)
 
 # The old git config keys, by the name they had, each with the prel.config.json
 # key it became. Read no more - a repository still carrying one is told about it
 # rather than quietly obeying it.
+#
+# prel.buildCommand was read by the release, so releaseBuildCommand is where it
+# goes - not buildCommand, which is the ordinary build 'prel build' runs.
 _PREL_CONFIG_GIT_KEYS=(prel.versionFile prel.tagPrefix prel.buildCommand \
 	prel.artifacts prel.plansDir)
 _PREL_CONFIG_GIT_NEW=(versionFile tagPrefix releaseBuildCommand \
 	artifacts plansDir)
-
-# Keys prel.config.json once had, each with the name it goes by now. A file
-# still setting one is named it rather than left to the unknown-key warning:
-# that one says only that the key is not read, and a release would go out with
-# no build where the file plainly asks for one.
-_PREL_CONFIG_RENAMED_OLD=(buildCommand)
-_PREL_CONFIG_RENAMED_NEW=(releaseBuildCommand)
 
 _prel_config_path() {
 	local root
@@ -159,12 +156,9 @@ _prel_config_check() {
 			return 2
 		fi
 
-		# A renamed key is one prel does not read either, and is taken out of
-		# the unknown ones so that it can be answered with the name it has now
-		# instead of with the whole key set.
 		mapfile -t unknown < <(printf '%s' "$json" | jq -r \
 			--argjson known "$(printf '%s\n' "${_PREL_CONFIG_KEYS[@]}" \
-				"${_PREL_CONFIG_RENAMED_OLD[@]}" | jq -R . | jq -s .)" \
+				| jq -R . | jq -s .)" \
 			'keys_unsorted - $known | .[]' 2>/dev/null)
 		if [ ${#unknown[@]} -gt 0 ]; then
 			echo "Warning: $file sets keys prel does not read:" >&2
@@ -172,17 +166,6 @@ _prel_config_check() {
 			echo "         prel reads: ${_PREL_CONFIG_KEYS[*]}" >&2
 			rc=1
 		fi
-
-		local old new
-		for i in "${!_PREL_CONFIG_RENAMED_OLD[@]}"; do
-			old="${_PREL_CONFIG_RENAMED_OLD[$i]}"
-			new="${_PREL_CONFIG_RENAMED_NEW[$i]}"
-			printf '%s' "$json" | jq -e --arg k "$old" \
-				'has($k) and .[$k] != null' >/dev/null 2>&1 || continue
-			echo "Warning: $file: \"$old\" is now called" >&2
-			echo "         \"$new\" and is read no more; rename the key to keep it" >&2
-			[ "$rc" = "0" ] && rc=1
-		done
 
 		local actual
 		for i in "${!_PREL_CONFIG_KEYS[@]}"; do
@@ -264,6 +247,7 @@ Description:
     {
       "versionFile": "VERSION",
       "tagPrefix": "v",
+      "buildCommand": "make",
       "releaseBuildCommand": "packaging/build-deb.sh ${version}",
       "artifacts": ["build/prel_${version}_all.deb"],
       "plansDir": "docs/plans"
@@ -274,14 +258,21 @@ Description:
 
     versionFile          where the version is, for 'prel release'   (VERSION)
     tagPrefix            what goes in front of the tag; "" for none (v)
-    releaseBuildCommand  the shell command that builds the release artifacts
+    buildCommand         the shell command 'prel build' runs
+    releaseBuildCommand  the shell command that builds the release artifacts,
+                         run by 'prel release' and by 'prel build --release'
     artifacts            the globs to attach to the release, an array, or one
                          string of them separated by spaces
     plansDir             where 'prel issue-from-plans' looks for plans
                          (docs/plans)
 
-  ${version} and ${tag} in releaseBuildCommand and artifacts are filled in by
-  'prel release' - see 'prel release usage'.
+  The two build commands are read one by its own command and never the other:
+  'prel build' runs buildCommand, a release runs releaseBuildCommand, and a
+  key not set means there is no build to run rather than the other one.
+
+  ${version} and ${tag} in the two build commands and in artifacts are filled
+  in with the version being built and the tag it gets - see 'prel build usage'
+  and 'prel release usage'.
 
   Reading the file needs jq, and nothing else about prel does: a repository
   with no prel.config.json never reaches for it. Where the file is there and

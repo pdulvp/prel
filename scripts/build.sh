@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
-# build.sh - Run the build a release would run, and nothing else
+# build.sh - Run the project's build, and nothing else
 #
 # Can be run directly or sourced from prel.sh
 # Usage: prel build [usage|<x.y.z> [options]]
 #        OR: ./scripts/build.sh [usage|<x.y.z> [options]]
 #
-# releaseBuildCommand in prel.config.json is the command 'prel release' runs
-# between the tag and the push. This runs the same command, from the same
-# directory, with the same two variables, and leaves the commit, the tag and
-# the push out of it: a build worth depending on at release time is one that
-# has been run before the release depends on it.
+# prel.config.json names two builds, because a project has two. buildCommand is
+# the ordinary one, run while working, and 'prel build' is the command for it.
+# releaseBuildCommand is the one that makes the files a release carries, run by
+# 'prel release' between the tag and the push, and 'prel build --release' runs
+# that one here - same directory, same variables, no commit, no tag, no push:
+# a build worth depending on at release time is one that has been run before
+# the release depends on it.
 #
-# The settings are the release's settings, read by release.sh - the version
-# file the version comes from, the tag prefix it gets, the build command
-# itself. Nothing here is configured separately: the point is to run what a
-# release would run.
+# Neither key stands in for the other. A project setting one build and not the
+# other has one build, and the command whose key is unset says so rather than
+# running something the file did not ask it to.
+#
+# The version and the tag are the release's settings, read by release.sh - the
+# same version file, the same tag prefix - so what 'prel build' builds at is
+# what 'prel release' would build at.
 
 # The build command itself, from the repository root, with $version and $tag
 # as shell variables. "packaging/build-deb.sh ${version}" is a string the
 # shell expands, which is how a build is told which version it is building;
-# the two names are documented, so both 'prel build' and the build step of
-# 'prel release' come through here rather than each expanding its own.
+# the two names are documented, so 'prel build', 'prel build --release' and
+# the build step of 'prel release' come through here rather than each
+# expanding its own.
 _prel_build_eval() {
 	local version="$1" tag="$2" command="$3" root
 	root=$(git rev-parse --show-toplevel 2>/dev/null) || return 1
@@ -29,27 +35,44 @@ _prel_build_eval() {
 	( cd "$root" && eval "$command" )
 }
 
+# The ordinary build, the one 'prel build' runs. Unset in a project whose
+# build is a command nobody needed prel to remember; the release build is
+# _rel_build_command, in release.sh, where the release settings are.
+_prel_build_command() {
+	_prel_config_text buildCommand ""
+}
+
 build() {
-	local version="" origin="" dry_run=0
-	local repo_root version_file tag command rc=0
+	local version="" origin="" dry_run=0 release=0
+	local repo_root version_file tag command key label rc=0
 
 	if [ "${1-}" = "usage" ]; then
 		cat <<'USAGE'
-build - Run the build a release would run, without releasing anything
+build - Run the project's build, without releasing anything
 
 Usage:
-  prel build usage        Show this help
-  prel build              Build at the version the version file reads
-  prel build <x.y.z>      Build at a version not yet in the file
-  prel build -n           Show what would run, run nothing
+  prel build usage          Show this help
+  prel build                Build at the version the version file reads
+  prel build <x.y.z>        Build at a version not yet in the file
+  prel build -n             Show what would run, run nothing
+  prel build --release      Run the release build instead of the ordinary one
 
 Description:
-  releaseBuildCommand in prel.config.json is the command 'prel release' runs
-  between the tag and the push - see 'prel config'. This runs that command
-  and stops there: nothing is committed, tagged, pushed or published, so a
-  build can be tried as often as it takes.
+  buildCommand in prel.config.json is the project's build, and this runs it -
+  see 'prel config'. Nothing is committed, tagged, pushed or published.
+
+    { "buildCommand": "make" }
+
+  releaseBuildCommand is the other build a project may have: the one that
+  makes the files a release carries, run by 'prel release' between the tag
+  and the push. 'prel build --release' runs that one, and stops there, so the
+  build a release will depend on can be tried as often as it takes rather
+  than first running on the release itself.
 
     { "releaseBuildCommand": "packaging/build-deb.sh ${version}" }
+
+  Neither key stands in for the other: with buildCommand unset, 'prel build'
+  says so and runs nothing rather than reaching for the release build.
 
   The command runs from the repository root, with $version set to the version
   being built and $tag to the tag it would get, which is how a build is told
@@ -58,7 +81,7 @@ Description:
 
   The version comes from the version file as it reads now, or from the
   argument where the build is for a version the file has not reached yet -
-  'prel build 1.0.1' builds what 'prel release 1.0.1' would build.
+  'prel build --release 1.0.1' builds what 'prel release 1.0.1' would build.
 
   The exit status is the build's own, so a script can gate on it. Where
   artifacts is set, what its patterns match is printed afterwards as a
@@ -71,6 +94,7 @@ USAGE
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			-n|--dry-run) dry_run=1 ;;
+			--release) release=1 ;;
 			-*)
 				echo "Error: Unknown option '$1' for build" >&2
 				echo "Try: prel build usage" >&2
@@ -97,15 +121,31 @@ USAGE
 	# A config worth reporting on before it is read for a command to run.
 	_prel_config_ok_verbose || return 1
 
-	# Nothing to build is the ordinary case - most projects release a tag and
-	# no files - and not a failure. Said with the key to set, since a 'prel
-	# build' that printed nothing would look like a build that did nothing.
-	command=$(_rel_build_command) || return 1
+	# Which of the two builds was asked for. The key is named in every line
+	# below, so the output says which one ran and not merely that a build did.
+	if [ "$release" = "1" ]; then
+		key="releaseBuildCommand"
+		label="prel build --release"
+		command=$(_rel_build_command) || return 1
+	else
+		key="buildCommand"
+		label="prel build"
+		command=$(_prel_build_command) || return 1
+	fi
+
+	# Nothing to build is the ordinary case - plenty of projects have no build
+	# worth naming here, and a release is usually the tag and nothing else -
+	# and not a failure. Said with the key to set, since a 'prel build' that
+	# printed nothing would look like a build that did nothing.
 	if [ -z "$command" ]; then
-		echo "releaseBuildCommand is not set in prel.config.json: there is no build"
+		echo "$key is not set in prel.config.json: there is no build"
 		echo "to run here. Set it with, say:"
 		echo ""
-		echo '  { "releaseBuildCommand": "packaging/build-deb.sh ${version}" }'
+		if [ "$release" = "1" ]; then
+			echo '  { "releaseBuildCommand": "packaging/build-deb.sh ${version}" }'
+		else
+			echo '  { "buildCommand": "make" }'
+		fi
 		return 0
 	fi
 
@@ -136,13 +176,15 @@ USAGE
 
 	tag="$(_rel_tag_prefix)$version" || return 1
 
-	echo "build:        $command"
-	echo "version:      $version ($origin)"
-	echo "tag:          $tag"
+	# The same column 'prel config' reports its settings in, which is what
+	# makes room for the longer of the two key names.
+	printf '%-21s %s\n' "$key:" "$command"
+	printf '%-21s %s\n' "version:" "$version ($origin)"
+	printf '%-21s %s\n' "tag:" "$tag"
 
 	if [ "$dry_run" = "1" ]; then
 		echo ""
-		echo "prel build: nothing run, -n"
+		echo "$label: nothing run, -n"
 		return 0
 	fi
 
@@ -176,7 +218,7 @@ USAGE
 		echo ""
 	fi
 
-	echo "prel build: $version built"
+	echo "$label: $version built"
 	return 0
 }
 
