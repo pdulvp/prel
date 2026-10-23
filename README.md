@@ -312,6 +312,58 @@ skips the whole thing, and so does `git commit --no-verify`.
 Plans are read from `docs/plans`, or from the `plansDir` of the repository's
 [`prel.config.json`](#configuring).
 
+### prel attach-issue (or **attach**)
+File a commit already made as a GitHub issue, and put its number in front of
+the subject.
+
+```bash
+prel attach-issue usage        # Show help
+prel attach-issue             # File HEAD's message as an issue
+prel attach-issue 515ed05     # Any commit of the branch, last or not
+prel attach-issue --all       # Every unattached commit ahead of upstream
+prel attach-issue 515ed05 -n  # Dry run: the issue it would file
+
+# Shortcut:
+prel attach --all
+```
+
+This is the counterpart of [`prel issue-from-plans`](#prel-issue-from-plans-or-issues),
+which files an issue *at* commit time out of the work plans. Use this one for a
+commit that is already in the history with a good message and no issue behind
+it: the message *is* the issue.
+
+The subject becomes the title, the rest of the message becomes the body, and
+the identity trailers - `Co-Authored-By:`, `Committer:`, `Signed-off-by:` and
+the like - are dropped from it, since the commit records all that already. The
+commit then gets the number in front of its subject:
+
+```
+#12 A release target, and the build stamp moved behind a `~`
+```
+
+The commit keeps its message otherwise, trailers included.
+
+**A commit that is not the last one is handled too.** The commits from it to
+`HEAD` are replayed onto its rewrite, the way
+[`prel recommit-last`](#prel-recommit-last-or-recommit) and
+[`prel exclude-from-git`](#prel-exclude-from-git-or-exclude) already replay
+them. Author identity, committer identity, author date and commit date are all
+kept: only the message changes. Commits before the target keep their hash; the
+target and everything after it get new ones, the previous HEAD is printed and
+kept in the reflog, and a branch that was already pushed needs a force push -
+which is said up front when the target is already on the upstream. Commit
+signatures do not survive the rewrite. The working tree and the index are never
+touched, so a dirty repository is fine.
+
+Left alone, and said so: a subject already carrying an issue number - so a
+second run is a no-op - a merge commit, and a commit that is not an ancestor of
+`HEAD`.
+
+`gh` and a GitHub remote are required here: unlike in the commit hooks, where
+nothing may stop a commit, the issue is the whole point. An issue filed for a
+rewrite that then failed is remembered in `.git/prel-attached-issue` and reused
+by the next run, so a failure leaves no orphan behind.
+
 ### prel config
 Show the settings this repository gives prel, and where they come from.
 
@@ -668,6 +720,7 @@ Scripts can also be run directly from the `scripts/` directory:
 /mnt/Data/Works/prel/scripts/recommit-last.sh 3
 /mnt/Data/Works/prel/scripts/exclude-from-git.sh secrets.env
 /mnt/Data/Works/prel/scripts/issue-from-plans.sh status
+/mnt/Data/Works/prel/scripts/attach-issue.sh HEAD~2
 /mnt/Data/Works/prel/scripts/init-skills.sh register
 /mnt/Data/Works/prel/scripts/init-memory.sh register
 /mnt/Data/Works/prel/scripts/init.sh status
