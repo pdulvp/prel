@@ -61,3 +61,11 @@ A plan found with `status: complete` is history: archive it, then start a fresh
 plan rather than appending to it. Starting a new plan is also the moment to
 catch up on a sum-up a crashed session skipped. Not needed for read-only
 questions. See [[resume-from-plan-file]].
+
+Watch the case a plan slips through: after one is archived, a run of small
+follow-up requests — each too small to deserve a plan on its own — that keeps
+growing until it has touched a dozen files. Judge by the accumulated change,
+not by the size of the latest request: the second follow-up that edits a file
+the previous one did not is the moment to open a plan, retroactively covering
+what is already done. The user caught exactly this and asked where the plan
+and sum-up were.
