@@ -477,7 +477,7 @@ prel release 1.0.1 --no-milestone # Create no milestone, move no issue
 For a project that keeps its version in a `VERSION` file at its root - three
 numbers in a file, which the build reads and nothing has to parse out of source
 code - a release is that file moved on and the commit it was moved in made
-public. Eight steps, stopping at the first that fails:
+public. Nine steps, stopping at the first that fails:
 
 1. write `1.0.1` into the `VERSION` file
 2. commit that file alone
@@ -489,6 +489,8 @@ public. Eight steps, stopping at the first that fails:
    now that it has them
 8. put the issues these commits fixed on a milestone named after the tag, and
    close them and it
+9. emit the pbus event `prel.release.published`, its payload the version, so
+   whatever waits on a release starts without the release waiting for it
 
 #### Release artifacts
 
@@ -648,6 +650,44 @@ wrong shape stops it where nothing has happened yet. The
 release commit is made with `PREL_SKIP_ISSUE` set, so it never spends the issue
 that `prel issue-from-plans` is holding for the next real commit.
 
+#### Announcing the release on pbus
+
+Step 9 is for whatever has to happen *because* a release went out: a site
+rebuilt, a package pushed somewhere else, a notification on a desktop. None of
+it is the release's work to wait for, and none of it belongs in prel.
+
+[pbus](https://github.com/pdulvp/pbus-events) is the dispatcher that owns that part -
+a command registers against an event name, and the daemon starts it when the
+event is emitted. `prel release` emits one event, once the release is really
+out:
+
+```
+pbus: Event "prel.release.published" accepted (id 7287118827db1d69), 2 listener(s) triggered.
+```
+
+The payload is the version and nothing else - `1.0.1`, not `v1.0.1`. The event
+is declared once per machine, by `sudo prel init-pbus register`, which is also
+where the listeners are documented.
+
+Nothing about this can cost a release. The emit is the last step for the same
+reason the milestone is: by then the tag is pushed and the release is
+published, so there is nothing left for a failure to spoil. pbus not installed
+or the event not declared is silence - most machines, and the reason the `.deb`
+has pbus as `Recommends` rather than `Depends`. A daemon that is not running, a
+key that cannot be found or a payload the event refuses is a warning naming the
+`pbus emit` to run again by hand:
+
+```
+Warning: 1.0.1 is released; it is the pbus event that did not go out
+         pbus: the bus does not exist (/run/pbus/bus): is pbusd running?
+         emit it again with:
+           pbus emit prel.release.published --payload 1.0.1
+```
+
+Nothing is emitted for a `--draft` or under `--no-release`: neither has
+published anything to announce. `prel release -n` says which of these applies
+before anything is done, on the `pbus:` line of its report.
+
 ### prel init-skills (or **skills**)
 Make the prel agent skills available to Claude Code.
 
@@ -710,6 +750,66 @@ Shipped today:
 Both are the convention `prel issue-from-plans` and the `plan-summary` skill are
 built around, so a repository using those wants them.
 
+### prel init-pbus
+Declare the pbus event a published release emits.
+
+```bash
+prel init-pbus usage            # Show help
+sudo prel init-pbus register    # Declare prel.release.published
+sudo prel init-pbus unregister  # Remove it
+prel init-pbus status           # What a release here would emit, and to whom
+```
+
+[pbus](https://github.com/pdulvp/pbus-events) is an event dispatcher: a command
+registers against an event name and the daemon launches it when that event is
+emitted. `prel release` emits `prel.release.published` as its
+[last step](#announcing-the-release-on-pbus), with the version as the payload.
+An event has to be declared before anything may emit it, and declaring one
+writes `/etc/pbus` - hence the `sudo`, and hence a command of prel's own rather
+than a line in the README to copy.
+
+`register` declares the event with a description and a payload pattern of the
+shape a version has, so a listener may read `"$PBUS_PAYLOAD"` as a version: the
+daemon refuses anything else before a single listener starts. There is no
+shortcut named `pbus` for this command, by the way - `prel.sh` sources every
+script into one shell, and a function of that name would shadow the pbus binary
+the release emits through.
+
+It is machine-wide and once and for all, unlike `prel init`, which registers
+what belongs to one repository. An event already declared is left exactly as it
+is: declaring it again would draw a new key and silently break whoever holds the
+old one, so `register` says what is there and points at
+`sudo pbus rotate-key prel.release.published --save` for the case where a new
+key is what was wanted.
+
+The key is the one thing worth knowing about. An emission presents a key and the
+daemon refuses one that does not match, which is what stops any account on the
+machine from firing a deployment. `register` keeps it in root's keyring and
+hands a copy to the account that called `sudo`, because that account - not root
+- is the one that runs `prel release`:
+
+```
+$ sudo prel init-pbus register
+Declared pbus event: prel.release.published
+  description:     A prel release has been published
+  payload pattern: ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$
+  key:             /etc/pbus/keys/prel.release.published (root)
+  key:             /home/alice/.config/pbus/keys/prel.release.published (alice)
+```
+
+Subscribing to the event is pbus's business, not prel's - prel emits, and what
+listens is a local decision:
+
+```bash
+sudo pbus register-listener prel.release.published --id notify \
+     -u root 'pbus-notify -u alice "prel $PBUS_PAYLOAD published"'
+```
+
+`status` needs no privileges and answers what a release from here would do:
+whether pbus is installed, whether the event is declared, whether this account
+holds a key for it, what shape of payload the event accepts, and which
+listeners it would trigger.
+
 ## Direct Script Usage
 
 Scripts can also be run directly from the `scripts/` directory:
@@ -723,6 +823,7 @@ Scripts can also be run directly from the `scripts/` directory:
 /mnt/Data/Works/prel/scripts/attach-issue.sh HEAD~2
 /mnt/Data/Works/prel/scripts/init-skills.sh register
 /mnt/Data/Works/prel/scripts/init-memory.sh register
+/mnt/Data/Works/prel/scripts/init-pbus.sh status
 /mnt/Data/Works/prel/scripts/init.sh status
 /mnt/Data/Works/prel/scripts/build.sh
 ```

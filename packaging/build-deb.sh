@@ -160,10 +160,13 @@ main() {
 	find "$stage" -type f -perm /u+x -exec chmod 0755 {} +
 	find "$stage" -type f ! -perm /u+x -exec chmod 0644 {} +
 
-	# gh and jq are Recommends, not Depends: only 'prel release' and
+	# gh, jq and pbus are Recommends, not Depends: only 'prel release' and
 	# 'prel issue-from-plans' reach for gh, and the rest of prel is useful on
 	# a machine that has never heard of GitHub. jq reads prel.config.json, and
-	# a repository with no such file - most of them - never needs it.
+	# a repository with no such file - most of them - never needs it. pbus is
+	# the event dispatcher a published release emits to, and a release where
+	# it is missing is a release and nothing less: the emit is the last step,
+	# and a silent one without pbus.
 	cat > "$stage/DEBIAN/control" <<EOF
 Package: ${PKG_NAME}
 Version: ${version}
@@ -171,7 +174,7 @@ Section: vcs
 Priority: optional
 Architecture: all
 Depends: bash (>= 4.0), git, coreutils
-Recommends: gh, jq
+Recommends: gh, jq, pbus
 Maintainer: ${PKG_MAINTAINER}
 Homepage: ${PKG_HOMEPAGE}
 Description: Git management toolkit for commit attribution and hooks

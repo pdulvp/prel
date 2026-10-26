@@ -53,6 +53,56 @@ _rel_artifacts() {
 }
 
 
+# ----------------------------------------------------------------------------
+# pbus: a published release announces itself
+# ----------------------------------------------------------------------------
+# A release that really went out is a moment other machinery waits for - a site
+# rebuild, a notification - and none of it is a release's work to wait for in
+# return. pbus is the dispatcher that owns that: an event is emitted here and
+# the daemon starts whatever registered against it.
+#
+# The name belongs to init-pbus.sh, where 'sudo prel init-pbus register'
+# declares the event; the default is repeated so that release.sh run on its own
+# still knows what to emit.
+_rel_pbus_event() {
+	printf '%s\n' "${_PREL_PBUS_EVENT:-prel.release.published}"
+}
+
+_rel_pbus_available() {
+	command -v pbus >/dev/null 2>&1
+}
+
+# Whether this machine knows the event: 'pbus show-event' exits non-zero on one
+# it has never been told about. Asked before anything is emitted, so a machine
+# that has pbus and no event declared is as quiet as one with no pbus at all.
+_rel_pbus_event_known() {
+	pbus show-event "$(_rel_pbus_event)" >/dev/null 2>&1
+}
+
+# The last step of a published release, and the only one that cannot fail it:
+# by the time this runs the tag is pushed and the release is out, so a daemon
+# that is not running or a key that cannot be found is a warning naming the
+# emission to repeat by hand. It returns 0 whatever happens.
+_rel_pbus_emit() {
+	local version="$1" event out
+	event=$(_rel_pbus_event)
+
+	_rel_pbus_available || return 0
+	_rel_pbus_event_known || return 0
+
+	if out=$(pbus emit "$event" --payload "$version" 2>&1); then
+		printf '%s\n' "$out" | sed -e 's/^/pbus: /'
+		return 0
+	fi
+
+	echo "" >&2
+	echo "Warning: $version is released; it is the pbus event that did not go out" >&2
+	printf '%s\n' "$out" | sed -e 's/^/         /' >&2
+	echo "         emit it again with:" >&2
+	echo "           pbus emit $event --payload $version" >&2
+	return 0
+}
+
 # Fill in the placeholders an artifacts pattern may carry: ${version} is
 # the version being released and ${tag} the tag it gets, braced or bare. Plain
 # string replacement rather than eval - a pattern becomes a filename, and must
@@ -545,6 +595,9 @@ Description:
        release out of draft now that it has them
     8. put the issues these commits fixed on a milestone named after the tag,
        creating it if it is not there, and close them and it
+    9. emit the pbus event $(_rel_pbus_event), its payload the version, so
+       that whatever waits on a release starts without the release waiting
+       for it
 
   Steps 4 and 7 happen only in a project that has asked for them, in its
   prel.config.json:
@@ -588,6 +641,14 @@ Description:
   all up, so it is never visible without them; --draft leaves it a draft. A
   pattern matching no file stops the release before the push - that is how a
   release goes out missing the one artifact nobody checked for.
+
+  Step 9 is pbus's, and happens only where pbus is installed and the event
+  declared - 'sudo prel init-pbus register' is what declares it, once per
+  machine. It is the last step for a reason: the release is already out, so
+  nothing here can fail one. pbus absent or the event undeclared is silence,
+  and a refused or unacknowledged emission is a warning naming the 'pbus emit'
+  to repeat. Nothing is emitted for a --draft or under --no-release: neither
+  has published anything to announce.
 
   Nothing is touched before every precondition is checked: a VERSION file to
   move, a three-number version, a branch rather than a detached HEAD, a tag
@@ -813,6 +874,20 @@ EOF
 	elif [ "$publish" = "1" ]; then
 		echo "milestone:    nothing, no issue named since ${previous:-the first commit}"
 	fi
+	# Only where pbus is installed: a machine that never heard of it is not
+	# told about an event it cannot have.
+	if _rel_pbus_available; then
+		if [ "$publish" != "1" ]; then
+			echo "pbus:         nothing, --no-release leaves nothing published to announce"
+		elif [ "$draft" = "1" ]; then
+			echo "pbus:         nothing, a draft has not shipped"
+		elif ! _rel_pbus_event_known; then
+			echo "pbus:         nothing, $(_rel_pbus_event) is not declared here"
+			echo "              declare it with 'sudo prel init-pbus register'"
+		else
+			echo "pbus:         emit $(_rel_pbus_event), payload $version"
+		fi
+	fi
 	if [ "$current" = "$version" ]; then
 		echo "note:         $version_file already reads $version, committing it as it stands"
 	fi
@@ -1032,6 +1107,10 @@ EOF
 		echo "prel release: $version released as $tag"
 	fi
 	printf '%s\n' "$url" | sed -n 's#.*\(https://[^ ]*\).*#              \1#p' | tail -1
+
+	# A draft announces nothing: it has not shipped.
+	[ "$draft" = "1" ] || _rel_pbus_emit "$version"
+
 	return 0
 }
 
@@ -1040,7 +1119,7 @@ EOF
 # has to load it itself - sourcing it only defines its functions.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	_rel_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	for _rel_sibling in config.sh build.sh; do
+	for _rel_sibling in config.sh build.sh init-pbus.sh; do
 		# shellcheck source=/dev/null
 		[ -r "$_rel_dir/$_rel_sibling" ] && source "$_rel_dir/$_rel_sibling"
 	done
