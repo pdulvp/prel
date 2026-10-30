@@ -102,7 +102,10 @@ silence there would look exactly like a setting that still works.
 ## Commands
 
 ### prel usage
-Show detailed help for all available commands.
+Show detailed help for all available commands, and repeat the list of them at
+the end: by then two hundred lines of help have scrolled past, and the end is
+where a terminal leaves the reader. `prel` on its own, or `prel help`, prints
+that list and nothing else.
 
 ### prel init
 Register everything prel shares with a repository, in one go.
@@ -463,6 +466,11 @@ Move the VERSION file on, tag it, push it and publish the release.
 prel release usage                # Show help
 prel release artifacts            # Say what the artifacts setting matches
 prel release artifacts 1.0.1      # The same, for a version not yet in the file
+prel release artifacts micro      # The same, for the version a level would give
+prel release major                # Release 1.0.0 from a file reading 0.2.7
+prel release minor                # Release 0.3.0 from a file reading 0.2.7
+prel release micro                # Release 0.2.8 from a file reading 0.2.7
+prel release current              # Release the version the file already reads
 prel release 1.0.1                # Bump, commit, tag, push, publish
 prel release 1.0.1 -n             # Show every step, change nothing
 prel release 1.0.1 -y             # Do not ask about uncommitted changes
@@ -491,6 +499,39 @@ public. Nine steps, stopping at the first that fails:
    close them and it
 9. emit the pbus event `prel.release.published`, its payload the version, so
    whatever waits on a release starts without the release waiting for it
+
+#### The version, or the word for it
+
+Which of the three a release is, is known long before what it is called, and
+the number is a sum done in the head over a file that is right there. So the
+three names go where the version goes - `major`, `minor` and `micro` move that
+digit of the version file and release what that gives:
+
+```console
+$ cat VERSION
+0.2.7
+$ prel release micro -n --no-release
+release:      0.2.7 -> 0.2.8 (micro)
+version file: VERSION
+commit:       Release 0.2.8
+tag:          v0.2.8 (annotated)
+push:         origin main, origin v0.2.8
+```
+
+`patch` is `micro` under its other name. `current` is the fourth word and no
+move at all: the version the file already reads, released as it stands, for one
+moved on by hand or by a script.
+
+A pre-release suffix comes off whichever digit moves, so a `micro` off
+`1.2.3-rc1` is `1.2.3` - the release the candidate was a candidate for - while
+a `minor` off it is `1.3.0`, as it is off `1.2.3`.
+
+Nothing else about a release changes: the same commit, tag, build, push,
+publish, milestone and event, at a version it worked out rather than one it was
+given. `prel release micro -n` shows the number before a release is made at it,
+and either way the first line says which version came out of the word.
+`prel release artifacts micro` answers the same word with the files that
+version would upload.
 
 #### Release artifacts
 

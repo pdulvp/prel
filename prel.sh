@@ -47,24 +47,48 @@ if [ -d "$SCRIPTS_DIR" ]; then
 	done
 fi
 
+# One line a command: the first line of its own usage, which is its name and
+# what it does. Printed by both renderers, so the short list and the list at
+# the foot of the long one cannot drift apart.
+_prel_command_lines() {
+	for script_file in "$SCRIPTS_DIR"/*.sh; do
+		if [ -f "$script_file" ]; then
+			# Extract function name from filename (replace - with _)
+			func_name=$(basename "$script_file" .sh | tr '-' '_')
+			# Get first line of usage from the function
+			first_line=$($func_name usage 2>/dev/null | head -1 || echo "  $func_name")
+			echo "  $first_line"
+		fi
+	done
+}
+
 # Display usage for all commands
 show_all_usage() {
 	cat <<EOF
 prel - Git management toolkit
 
-Available commands:
+The help of every command, in full. The list of them is at the end.
 EOF
 	
 	# For each script, call its function with "usage" argument
 	for script_file in "$SCRIPTS_DIR"/*.sh; do
 		if [ -f "$script_file" ]; then
-			# Extract function name from filename (replace - with _)
 			func_name=$(basename "$script_file" .sh | tr '-' '_')
 			# Call the function with usage argument
 			echo ""
 			$func_name usage 2>/dev/null || true
 		fi
 	done
+	
+	# Again at the foot of it: two hundred lines of help have scrolled by, and
+	# this is where a terminal leaves the reader.
+	cat <<EOF
+
+================================================================================
+
+All commands:
+EOF
+	_prel_command_lines
 	
 	cat <<EOF
 
@@ -82,14 +106,7 @@ Usage: prel <command> [action]
 Available commands:
 EOF
 	
-	for script_file in "$SCRIPTS_DIR"/*.sh; do
-		if [ -f "$script_file" ]; then
-			func_name=$(basename "$script_file" .sh | tr '-' '_')
-			# Get first line of usage from the function
-			first_line=$($func_name usage 2>/dev/null | head -1 || echo "  $func_name")
-			echo "  $first_line"
-		fi
-	done
+	_prel_command_lines
 	
 	cat <<EOF
 

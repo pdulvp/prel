@@ -2,8 +2,8 @@
 # release.sh - Move the VERSION file on, tag it, push it and publish the release
 #
 # Can be run directly or sourced from prel.sh
-# Usage: prel release [usage|<x.y.z> [options]]
-#        OR: ./scripts/release.sh [usage|<x.y.z> [options]]
+# Usage: prel release [usage|<x.y.z>|major|minor|micro|current [options]]
+#        OR: ./scripts/release.sh [usage|<x.y.z>|major|minor|micro|current [options]]
 #
 # For a project whose version lives in a VERSION file at its root, the plainest
 # form there is: the file is what the build reads, so moving it on, tagging that
@@ -137,6 +137,71 @@ _rel_placeholder_hint() {
 # The three numbers a VERSION file is for, the pre-release suffix allowed.
 _rel_is_version() {
 	[[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+}
+
+# The names a release goes by before it has a number. Which of the three a
+# release is, is known long before what it is called: the version file reads
+# 0.2.7, so the micro is 0.2.8 - a sum done in the head every time, over a
+# file that is right there. 'patch' is let in beside 'micro' because half the
+# world calls that digit the patch.
+_rel_is_level() {
+	case "$1" in
+		major|minor|micro|patch) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+# <level> applied to <version>. A pre-release suffix comes off whichever moves:
+# 1.2.3-rc1 is a version on its way to 1.2.3, so the micro off it is 1.2.3
+# itself - the suffix coming off is the move - while a minor or a major moves
+# its own digit and leaves the suffix behind either way. 10# on the arithmetic,
+# since a digit written 08 is not an octal number here, it is August.
+_rel_next_version() {
+	local level="$1" version="$2" major minor micro suffix
+	[[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$ ]] || return 1
+	major=${BASH_REMATCH[1]}
+	minor=${BASH_REMATCH[2]}
+	micro=${BASH_REMATCH[3]}
+	suffix=${BASH_REMATCH[4]}
+	case "$level" in
+		major) major=$((10#$major + 1)); minor=0; micro=0 ;;
+		minor) minor=$((10#$minor + 1)); micro=0 ;;
+		micro|patch) [ -n "$suffix" ] || micro=$((10#$micro + 1)) ;;
+		*) return 1 ;;
+	esac
+	printf '%s.%s.%s\n' "$major" "$minor" "$micro"
+}
+
+# What the word a release was given means, now that the version file has been
+# read. An <x.y.z> is itself and was counted from nothing; 'current' is the
+# file as it stands, for a version put there by hand or by an earlier step; a
+# level is that version moved on. One resolver, so 'prel release artifacts'
+# and the release proper make the same version of the same word.
+_rel_resolve_version() {
+	local token="$1" current="$2"
+	if _rel_is_version "$token"; then
+		printf '%s\n' "$token"
+		return 0
+	fi
+	if [ "$token" = "current" ]; then
+		printf '%s\n' "$current"
+		return 0
+	fi
+	_rel_next_version "$token" "$current"
+}
+
+# Said over a word that needs the version file, where the file cannot answer
+# for it. $1 is the word, $2 the file, $3 what it reads, $4 the command to
+# show an example of.
+_rel_uncountable() {
+	local token="$1" version_file="$2" current="$3" example="$4"
+	if [ -z "$current" ]; then
+		echo "Error: $version_file is empty, so '$token' has nothing to count from" >&2
+	else
+		echo "Error: $version_file reads '$current', which is not a version of three" >&2
+		echo "       numbers, so '$token' has nothing to count from" >&2
+	fi
+	echo "       pass the version itself, as in '$example 1.0.1'" >&2
 }
 
 _rel_remote() {
@@ -482,16 +547,19 @@ _rel_check_artifacts() {
 		return 0
 	fi
 
-	if [ -n "$version" ]; then
-		if ! _rel_is_version "$version"; then
-			echo "Error: '$version' is not a version of three numbers (1.0.1, 1.0.1-rc1)" >&2
-			return 1
-		fi
+	if _rel_is_version "$version"; then
 		origin="given"
+	elif [ -n "$version" ] && ! _rel_is_level "$version" && [ "$version" != "current" ]; then
+		echo "Error: '$version' is neither a version of three numbers (1.0.1, 1.0.1-rc1)" >&2
+		echo "       nor one of major, minor, micro, current" >&2
+		return 1
 	else
-		# What the file reads now stands in for the release about to be made.
-		# Taken as it reads, not checked: this command reports, and a version
-		# worth refusing is refused by the release itself.
+		# What the file reads now stands in for the release about to be made,
+		# and a level asked for here is the release that 'prel release
+		# <level>' would make. Taken as it reads otherwise, not checked: this
+		# command reports, and a version worth refusing is refused by the
+		# release itself.
+		local asked="$version"
 		version_file=$(_rel_version_file)
 		if [ ! -f "$version_file" ]; then
 			echo "Error: no $version_file in $repo_root to take the version from" >&2
@@ -499,12 +567,22 @@ _rel_check_artifacts() {
 			return 1
 		fi
 		version=$(tr -d '[:space:]' < "$version_file")
-		if [ -z "$version" ]; then
+		if [ -z "$version" ] && [ -z "$asked" ]; then
 			echo "Error: $version_file is empty, so there is no version to fill in" >&2
 			echo "       pass one, as in 'prel release artifacts 1.0.1'" >&2
 			return 1
 		fi
-		origin="from $version_file"
+		if [ -n "$asked" ]; then
+			if ! _rel_is_version "$version"; then
+				_rel_uncountable "$asked" "$version_file" "$version" \
+					"prel release artifacts"
+				return 1
+			fi
+			version=$(_rel_resolve_version "$asked" "$version") || return 1
+			origin="$asked, from $version_file"
+		else
+			origin="from $version_file"
+		fi
 	fi
 
 	tag="$(_rel_tag_prefix)$version"
@@ -567,6 +645,11 @@ Usage:
   prel release usage              Show this help
   prel release artifacts          Say what the artifacts setting matches
   prel release artifacts <x.y.z>  The same, for a version not yet in the file
+  prel release artifacts <level>  The same, for the version a level would give
+  prel release major              Release 1.0.0 from a file reading 0.2.7
+  prel release minor              Release 0.3.0 from a file reading 0.2.7
+  prel release micro              Release 0.2.8 from a file reading 0.2.7
+  prel release current            Release the version the file already reads
   prel release <x.y.z>            Bump, commit, tag, push, publish
   prel release <x.y.z> -n         Show every step, change nothing
   prel release <x.y.z> -y         Do not ask about uncommitted changes
@@ -585,7 +668,7 @@ Description:
   release is that file moved on and the commit it was moved in made public.
   This does the steps in order, and stops at the first one that fails:
 
-    1. write <x.y.z> into the VERSION file
+    1. write the version into the VERSION file
     2. commit that file alone
     3. tag the commit, annotated, as v<x.y.z>
     4. build the artifacts, where releaseBuildCommand says how
@@ -598,6 +681,21 @@ Description:
     9. emit the pbus event $(_rel_pbus_event), its payload the version, so
        that whatever waits on a release starts without the release waiting
        for it
+
+  The version can be worked out rather than given. major, minor and micro are
+  the three ways a version moves, and the version file is what they move: with
+  it reading 0.2.7, 'prel release micro' releases 0.2.8, 'minor' releases
+  0.3.0 and 'major' releases 1.0.0. 'patch' is micro under its other name, and
+  'current' is no move at all - the version the file already reads, released
+  as it stands, for one moved on by hand or by a script.
+
+  A pre-release suffix comes off whichever digit moves, so a micro off
+  1.2.3-rc1 is 1.2.3: the release the candidate was a candidate for. A minor
+  off it is 1.3.0, as it is off 1.2.3.
+
+  'prel release micro -n' is how to see the number before a release is made
+  at it. Either way the first line says which version came out of the word:
+  'release: 0.2.7 -> 0.2.8 (micro)'.
 
   Steps 4 and 7 happen only in a project that has asked for them, in its
   prel.config.json:
@@ -711,15 +809,23 @@ EOF
 	done
 
 	if [ -z "$version" ]; then
-		echo "Error: release wants a version, as in 'prel release 1.0.1'" >&2
+		echo "Error: release wants a version or a level, as in 'prel release 1.0.1'" >&2
+		echo "       or 'prel release micro'" >&2
 		return 1
 	fi
 
-	# A typo here becomes a tag, so it is worth refusing.
-	if ! _rel_is_version "$version"; then
-		echo "Error: '$version' is not a version of three numbers (1.0.1, 1.0.1-rc1)" >&2
+	# A typo here becomes a tag, so it is worth refusing. The levels are
+	# refused here as well, where they are misspelled, before the network is
+	# asked anything; what one of them resolves to has to wait for the version
+	# file, which is read under the repository root below.
+	local asked="$version"
+	if ! _rel_is_version "$asked" && ! _rel_is_level "$asked" \
+		&& [ "$asked" != "current" ]; then
+		echo "Error: '$asked' is neither a version of three numbers (1.0.1, 1.0.1-rc1)" >&2
+		echo "       nor one of major, minor, micro, current" >&2
 		return 1
 	fi
+	version=""
 
 	local REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 	if [ -z "$REPO_ROOT" ]; then
@@ -746,6 +852,19 @@ EOF
 		return 1
 	fi
 	current=$(tr -d '[:space:]' < "$version_file")
+
+	# The word becomes a version here, where the file it is counted from has
+	# just been read. An <x.y.z> was counted from nothing and passes through,
+	# which is why an empty or unreadable version file is no obstacle to one.
+	if _rel_is_version "$asked"; then
+		version="$asked"
+	else
+		if ! _rel_is_version "$current"; then
+			_rel_uncountable "$asked" "$version_file" "$current" "prel release"
+			return 1
+		fi
+		version=$(_rel_resolve_version "$asked" "$current") || return 1
+	fi
 
 	local branch
 	branch=$(git symbolic-ref --short -q HEAD) || branch=""
@@ -829,7 +948,11 @@ EOF
 	local others
 	others=$(git status --porcelain -- . ":(exclude)$version_file")
 
-	echo "release:      $current -> $version"
+	if [ "$asked" = "$version" ]; then
+		echo "release:      $current -> $version"
+	else
+		echo "release:      $current -> $version ($asked)"
+	fi
 	echo "version file: $version_file"
 	echo "commit:       $message"
 	echo "tag:          $tag (annotated)"
