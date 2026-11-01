@@ -754,7 +754,7 @@ Shipped today:
   `prel issue-from-plans` turns into a GitHub issue and a commit subject.
 
 ### prel init-memory (or **memory**)
-Share prel's Claude Code memories with a repository.
+Share prel's agent memories with a repository - Claude Code and Mistral Vibe.
 
 ```bash
 prel init-memory usage         # Show help
@@ -780,6 +780,19 @@ sees the edit at once.
 Memories belonging to one repository alone - its build, its stack - stay where
 they are. prel only ever rewrites its own block of `MEMORY.md`, and refuses to
 touch a local file of the same name that says something different.
+
+Mistral Vibe keeps no per-project memory directory of its own, so `register`
+gives it one at the same location Claude Code uses, under the Vibe config dir:
+`$VIBE_CONFIG_DIR/projects/<the same dash-slug>/memory`
+(`~/.vibe/projects/<slug>/memory` by default), and splices a loader block into
+the user-level `~/.vibe/AGENTS.md` - `AGENTS.md` being what Vibe loads at the
+start of every session, in every project. The block tells the session to read
+`~/.vibe/projects/<slug>/memory/MEMORY.md` and every memory file it links, so the
+memories are standing instructions from the first turn. The linked files
+resolve into the prel tree, which sits outside a consumer project's workspace:
+where the `.deb` is installed that is `/usr/share/prel`, so add
+`/usr/share/prel/memory` (or the clone's `memory/`) to
+`~/.vibe/trusted_folders.toml` for Vibe to read them from another project.
 
 Shipped today:
 
@@ -939,8 +952,10 @@ anyway.
   should it have been edited away
 - `.githooks/post-commit` - Stamps the filed plans and consumes their sum-up
 - `skills/plan-summary/SKILL.md` - The format of `docs/plans/sumup.md`
-- `memory/*.md` - Claude Code memories shared across repositories, plus the
-  `INDEX.md` lines spliced into each project's `MEMORY.md`
+- `memory/*.md` - agent memories shared across repositories: linked into each
+  project's Claude memory directory and Vibe memory directory
+  (`~/.vibe/projects/<slug>/memory`), with the `INDEX.md` lines spliced into
+  each `MEMORY.md` and a loader block in `~/.vibe/AGENTS.md`
 
 Read from the repository being worked on, not from prel:
 
@@ -970,7 +985,8 @@ repository that registered prel, including those that want none of this.
 
 `prel init-skills register` and `prel init-memory register` work the same way
 for the agent skills and the shared memories: links in `~/.claude/skills` and in
-the project's memory directory rather than a copy per project, so the prel
+each project's memory directories (`~/.claude/projects/<slug>/memory` and
+`~/.vibe/projects/<slug>/memory`) rather than a copy per project, so the prel
 checkout stays the single place they are edited.
 
 Those three registrations are independent, and the issue filing needs all of
