@@ -43,7 +43,7 @@ Never write it for an in-progress plan, and never delete it by hand: the
 
 **One H1, first line, 70 characters at most.** It is both the issue title and
 the commit subject. A noun phrase or an imperative, no trailing period, no
-issue number — prel adds that. No `Plan —` prefix, no date: the plan files
+issue number — prel adds that. No `Plan —` prefix or `Sumup —` prefix, no date: the plan files
 carry those.
 
 **Two to five bullets under it.** They become the commit body and the issue's
