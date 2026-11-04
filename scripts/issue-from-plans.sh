@@ -532,7 +532,8 @@ Usage:
 Description:
   On commit, the prel hooks file the plans under docs/plans/ that are marked
   'status: complete' and carry no 'issue:' field yet as one GitHub issue, and
-  put the issue number in front of the commit subject:
+  put the issue number in front of the commit subject — the hooks write that
+  prefix themselves, out of gh's answer; never type one into a message:
 
     #12 Paquetage Windows: zip avec les DLL de Qt
 

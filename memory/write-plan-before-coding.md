@@ -26,10 +26,16 @@ updated: YYYY-MM-DD HH:MM
 ```
 
 In that same response, write the plan's sum-up to `docs/plans/sumup.md`, in the
-format of prel's `plan-summary` skill. The prel hooks turn it into one GitHub
-issue at the next commit — covering every `complete` plan that carries no
-`issue:` field yet — put `#<n>` in front of the commit subject, stamp the plans
-and delete `sumup.md`. `prel issue-from-plans status` says what the next commit
+format of prel's `plan-summary` skill. At the next commit, the prel hooks turn
+it into one GitHub issue — covering every `complete` plan that carries no
+`issue:` field yet — and it is the hooks that put `#<n>` in front of the commit
+subject, stamp the plans and delete `sumup.md`, the number being read out of
+`gh issue create`'s answer. That prefix is never typed by hand: a commit
+message you write must not start with `#<n>`, and a plan's `issue:` field is
+stamped by the post-commit hook, not filled in by you. If `gh` is missing or
+fails, the commit goes through without a number and the hooks say so on
+stderr — leave it unnumbered and report it, never count or guess a number to
+keep a sequence going. `prel issue-from-plans status` says what the next commit
 would file.
 
 When the plan reaches `complete`, and whenever an existing plan is about to be

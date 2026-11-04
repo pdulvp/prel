@@ -2,3 +2,4 @@
 - [Resume from the plan file](resume-from-plan-file.md) — on "continue where you left off", read the most recently modified plan in docs/plans/ before anything else.
 - [Plain, professional tone](plain-professional-tone.md) — no humour, no sarcasm, no performed personality; lead with the result.
 - [Correct French prose](correct-french-prose.md) — French comments, plans and sumups must be grammatically and semantically correct, plainly written.
+- [Never invent an issue number](never-invent-issue-numbers.md) — the `#N` of a commit subject is written only by the prel hooks or `prel attach-issue`, out of `gh`'s answer; a commit message never carries a hand-typed number.
