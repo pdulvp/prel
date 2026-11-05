@@ -52,7 +52,8 @@ travel with the clone instead of being set once per machine by hand.
   "buildCommand": "make",
   "releaseBuildCommand": "packaging/build-deb.sh ${version}",
   "artifacts": ["build/prel_${version}_all.deb"],
-  "plansDir": "docs/plans"
+  "plansDir": "docs/plans",
+  "publicReleasesRepository": "acme/myapp-releases"
 }
 ```
 
@@ -67,6 +68,7 @@ defaults in the table below, which is most of them.
 | `releaseBuildCommand` | the shell command that builds the release artifacts, run by `prel release` | none |
 | `artifacts` | the globs to attach to the release | none |
 | `plansDir` | where `prel issue-from-plans` looks for plans | `docs/plans` |
+| `publicReleasesRepository` | a second GitHub repository, `owner/repo`, that [`prel public-release`](#prel-public-release) publishes a release on | none |
 
 `prel config` prints the settings as prel reads them, marks the ones that are
 defaults, and reports anything wrong with the file - including a key prel does
@@ -262,6 +264,26 @@ reflog, and a branch that was already pushed needs a force push afterwards. The
 old objects stay in the repository until the reflog is expired and `git gc` runs
 (the command prints how). Commit signatures do not survive the rewrite.
 
+### prel reapply-releases
+Re-point the tags and GitHub releases that a history rewrite left behind, then
+force-push the branch.
+
+```bash
+prel reapply-releases usage    # Show help
+prel reapply-releases -n       # Dry run: show what would move
+prel reapply-releases          # Move the diverged tags and releases, force-push
+```
+
+After `prel exclude-from-git` rewrote the local branch, the tags on the remote
+- and the releases attached to them - still point at the old commits. A tag has
+diverged when the commit it points at is no longer an ancestor of the local
+HEAD; it is then re-pointed at the local commit with the same message (a
+rewrite keeps messages and dates), locally and on the remote. Its GitHub
+release is recreated on the new tag with the same title, notes, flags and
+assets - downloaded from the old release first, uploaded again after. Tags that
+have not diverged are left alone. Finally the local branch is force-pushed onto
+the same-named branch of the remote, with a lease on the tip read beforehand.
+
 ### prel issue-from-plans (or **issues**)
 File the completed work plans of a repository as a GitHub issue, at commit time.
 
@@ -379,6 +401,7 @@ buildCommand:         none (default)
 releaseBuildCommand:  packaging/build-deb.sh ${version}
 artifacts:            build/prel_${version}_all.deb
 plansDir:             docs/plans (default)
+publicReleasesRepository: none (default)
 
 prel config: nothing to report
 ```
@@ -389,7 +412,7 @@ value, `(default)` against the ones the file does not set, and `"" (empty, set
 on purpose)` against a `tagPrefix` deliberately emptied to get a bare tag.
 
 What it reports, on stderr, is anything wrong with the file: a key prel does
-not read, named alongside the six it does; a value of the wrong shape; a file
+not read, named alongside the seven it does; a value of the wrong shape; a file
 that is not a JSON object, or one that `jq` is not installed to read. It exits
 `0` where there is nothing to say, `1` where there are warnings and `2` where
 the file cannot be used as it stands - `prel release` runs the same check
@@ -728,6 +751,49 @@ Warning: 1.0.1 is released; it is the pbus event that did not go out
 Nothing is emitted for a `--draft` or under `--no-release`: neither has
 published anything to announce. `prel release -n` says which of these applies
 before anything is done, on the `pbus:` line of its report.
+
+### prel public-release
+Publish a release on the public releases repository, without touching this one.
+
+```bash
+prel public-release usage         # Show help
+prel public-release 1.0.1         # Publish 1.0.1 on publicReleasesRepository
+prel public-release micro         # The version a level gives, from the VERSION file
+prel public-release current       # The version the VERSION file already reads
+prel public-release 1.0.1 -n      # Show every step, change nothing
+prel public-release 1.0.1 -m "…"  # Message for the commit and the tag
+prel public-release 1.0.1 --draft # Publish the GitHub release as a draft
+```
+
+`publicReleasesRepository` in [`prel.config.json`](#configuring) names a second
+GitHub repository, as `owner/repo` - a releases-only repository holding nothing
+but the version, the tag and the release with its artifacts:
+
+```json
+{ "publicReleasesRepository": "acme/myapp-releases" }
+```
+
+The command clones that repository into a temporary directory, writes the same
+`versionFile` there with the version being published, commits that file alone,
+tags the commit as `v1.0.1` (the `tagPrefix` of this repository), pushes the
+branch and the tag, then creates the GitHub release there with the notes this
+repository's commits make, and uploads the `artifacts` **copied from this
+repository's tree** - the files `prel release` built, not a build run again. No
+build runs here, and a pattern matching no file stops the command before
+anything is cloned.
+
+This repository is only read, never written: its `VERSION` file is not touched,
+and the commit and the tag are made in the clone. The version can be given or
+worked out - `major`, `minor`, `micro`, `current` read the version file here
+exactly as `prel release` does - so `prel release 1.0.1` followed by
+`prel public-release 1.0.1` publishes the same release on both repositories.
+
+The release on the public repository is created as a **draft** whenever there
+are artifacts, taken out of draft once they are all up; `--draft` leaves it a
+draft. A tag already on the public repository is reported and nothing is pushed,
+so publishing the same version twice is a no-op. There is no milestone and no
+pbus event there: the issues live in this repository, and the release is
+announced once, by `prel release`.
 
 ### prel init-skills (or **skills**)
 Make the prel agent skills available to Claude Code.

@@ -18,9 +18,9 @@
 # is the one array, 'text' the plain strings; the type is what _prel_config_check
 # holds a value against.
 _PREL_CONFIG_KEYS=(versionFile tagPrefix buildCommand releaseBuildCommand \
-	artifacts plansDir)
-_PREL_CONFIG_TYPES=(text text text text list text)
-_PREL_CONFIG_DEFAULTS=(VERSION v "" "" "" docs/plans)
+	artifacts plansDir publicReleasesRepository)
+_PREL_CONFIG_TYPES=(text text text text list text text)
+_PREL_CONFIG_DEFAULTS=(VERSION v "" "" "" docs/plans "")
 
 # The old git config keys, by the name they had, each with the prel.config.json
 # key it became. Read no more - a repository still carrying one is told about it
@@ -250,7 +250,8 @@ Description:
       "buildCommand": "make",
       "releaseBuildCommand": "packaging/build-deb.sh ${version}",
       "artifacts": ["build/prel_${version}_all.deb"],
-      "plansDir": "docs/plans"
+      "plansDir": "docs/plans",
+      "publicReleasesRepository": "acme/myapp-releases"
     }
 
   Every key is optional and the file itself is optional; a repository with
@@ -265,6 +266,11 @@ Description:
                          string of them separated by spaces
     plansDir             where 'prel issue-from-plans' looks for plans
                          (docs/plans)
+    publicReleasesRepository
+                         a second GitHub repository, owner/repo, that
+                         'prel public-release' publishes a release on: the
+                         same version file, tag, release and artifacts there
+                         (none)
 
   The two build commands are read one by its own command and never the other:
   'prel build' runs buildCommand, a release runs releaseBuildCommand, and a
