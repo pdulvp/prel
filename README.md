@@ -53,7 +53,10 @@ travel with the clone instead of being set once per machine by hand.
   "releaseBuildCommand": "packaging/build-deb.sh ${version}",
   "artifacts": ["build/prel_${version}_all.deb"],
   "plansDir": "docs/plans",
-  "publicReleasesRepository": "acme/myapp-releases"
+  "publicReleasesRepository": "acme/myapp-releases",
+  "commands": [
+    { "name": "deb", "launch": "packaging/build-deb.sh ${version}" }
+  ]
 }
 ```
 
@@ -402,6 +405,8 @@ releaseBuildCommand:  packaging/build-deb.sh ${version}
 artifacts:            build/prel_${version}_all.deb
 plansDir:             docs/plans (default)
 publicReleasesRepository: none (default)
+commands:             1 named command(s)
+                      deb -> packaging/build-deb.sh ${version}
 
 prel config: nothing to report
 ```
@@ -412,7 +417,7 @@ value, `(default)` against the ones the file does not set, and `"" (empty, set
 on purpose)` against a `tagPrefix` deliberately emptied to get a bare tag.
 
 What it reports, on stderr, is anything wrong with the file: a key prel does
-not read, named alongside the seven it does; a value of the wrong shape; a file
+not read, named alongside the eight it does; a value of the wrong shape; a file
 that is not a JSON object, or one that `jq` is not installed to read. It exits
 `0` where there is nothing to say, `1` where there are warnings and `2` where
 the file cannot be used as it stands - `prel release` runs the same check
@@ -481,6 +486,48 @@ The exit status is the build's own, so a script can gate on it. Where
 `artifacts` is set, what its patterns match is printed after a build that
 worked - as a report, not a verdict: `prel release artifacts` is the one that
 exits non-zero over a pattern that matched nothing.
+
+### prel run
+Run one of the named commands of `prel.config.json`, with the arguments after
+the name appended to it.
+
+```bash
+prel run usage                  # Show help
+prel run                        # List the named commands
+prel run deb                    # Run the command called "deb"
+prel run test unit              # Run "test" with "unit" appended
+prel run -n deb                 # Show what would run, run nothing
+```
+
+`commands` is a list of objects, each a `name` and the `launch` shell command
+run under that name:
+
+```json
+"commands": [
+  { "name": "deb", "launch": "packaging/build-deb.sh ${version}" },
+  { "name": "test", "launch": "make test" }
+]
+```
+
+```console
+$ prel run deb
+command:              deb
+launch:               packaging/build-deb.sh ${version}
+version:              0.2.11
+tag:                  v0.2.11
+
+Built build/prel_0.2.11_all.deb (0.2.11)
+
+prel run: 'deb' done
+```
+
+The launch runs from the repository root with `$version` and `$tag` set the
+same way [`prel build`](#prel-build) sets them, so `${version}` in a launch is
+the version the version file reads. Every argument after the name is appended
+to the launch, quoted one by one, so `prel run test "a b"` passes `a b` as one
+argument. The exit status is the command's own. A name the file does not
+define is an error that lists the names it does; with no name at all,
+`prel run` lists the commands and runs nothing.
 
 ### prel release
 Move the VERSION file on, tag it, push it and publish the release.

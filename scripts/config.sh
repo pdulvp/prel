@@ -15,12 +15,12 @@
 # configs/.gitconfig-* includes, and belong where git looks for them.
 
 # Every key prel reads, and what it means where the file says nothing. 'list'
-# is the one array, 'text' the plain strings; the type is what _prel_config_check
-# holds a value against.
+# is the one array of strings, 'text' the plain strings, 'commands' the one
+# array of objects; the type is what _prel_config_check holds a value against.
 _PREL_CONFIG_KEYS=(versionFile tagPrefix buildCommand releaseBuildCommand \
-	artifacts plansDir publicReleasesRepository)
-_PREL_CONFIG_TYPES=(text text text text list text text)
-_PREL_CONFIG_DEFAULTS=(VERSION v "" "" "" docs/plans "")
+	artifacts plansDir publicReleasesRepository commands)
+_PREL_CONFIG_TYPES=(text text text text list text text commands)
+_PREL_CONFIG_DEFAULTS=(VERSION v "" "" "" docs/plans "" "")
 
 # The old git config keys, by the name they had, each with the prel.config.json
 # key it became. Read no more - a repository still carrying one is told about it
@@ -114,6 +114,34 @@ _prel_config_list() {
 	return 0
 }
 
+# Every command as one "name<TAB>launch" a line, in the order of the file: the
+# list 'prel run' prints and the entries 'prel config' reports. Nothing where
+# the file sets no commands, 2 where it cannot be read.
+_prel_config_commands() {
+	local json
+	json=$(_prel_config_read) || return $?
+	printf '%s' "$json" | jq -r --arg k commands '
+		if has($k) and .[$k] != null and (.[$k] | type) == "array" then
+			.[$k][] | select((.name? | type) == "string" and (.launch? | type) == "string") | "\(.name)\t\(.launch)"
+		else empty end' 2>/dev/null
+	return 0
+}
+
+# The launch of one named command: printed and 0 where the file defines it, 1
+# where no command bears the name, 2 where the file cannot be read. The 'v'/'u'
+# prefix tells the first two apart the way _prel_config_get does; the first
+# entry wins if the check has not already refused a duplicated name.
+_prel_config_command_launch() {
+	local name="$1" json out
+	json=$(_prel_config_read) || return $?
+	out=$(printf '%s' "$json" | jq -r --arg k commands --arg n "$name" '
+		if has($k) and .[$k] != null and (.[$k] | type) == "array" then
+			([.[$k][] | select(.name? == $n)] | if length > 0 then "v" + (.[0].launch? // "") else "u" end)
+		else "u" end' 2>/dev/null) || return 2
+	[ "$out" = "u" ] && return 1
+	printf '%s\n' "${out#v}"
+}
+
 # A text setting, or its default where the file is silent. The reading errors
 # are not hidden: a file that cannot be read fails the command that wanted a
 # setting out of it, rather than handing back a default that looks like one.
@@ -173,6 +201,62 @@ _prel_config_check() {
 			type="${_PREL_CONFIG_TYPES[$i]}"
 			actual=$(printf '%s' "$json" | jq -r --arg k "$key" \
 				'if has($k) then (.[$k] | type) else "absent" end' 2>/dev/null)
+
+			# The one structured setting: an array of objects, each a name and
+			# the launch to run under it. Checked entry by entry, so the
+			# message names the entry that is wrong rather than the key alone.
+			if [ "$type" = "commands" ]; then
+				if [ "$actual" = "absent" ] || [ "$actual" = "null" ]; then
+					continue
+				fi
+				if [ "$actual" != "array" ]; then
+					echo "Error: $file: $key should be an array of objects with" >&2
+					echo "       \"name\" and \"launch\", not $actual" >&2
+					rc=2
+					continue
+				fi
+				local n j entry etype ename extra
+				n=$(printf '%s' "$json" | jq --arg k "$key" '.[$k] | length' 2>/dev/null)
+				for ((j = 0; j < n; j++)); do
+					entry=$(printf '%s' "$json" | jq -c --arg k "$key" --argjson j "$j" '.[$k][$j]' 2>/dev/null)
+					etype=$(printf '%s' "$entry" | jq -r 'type' 2>/dev/null)
+					if [ "$etype" != "object" ]; then
+						echo "Error: $file: $key[$j] should be an object with \"name\"" >&2
+						echo "       and \"launch\", not $etype" >&2
+						rc=2
+						continue
+					fi
+					ename=$(printf '%s' "$entry" | jq -r '.name? // empty' 2>/dev/null)
+					if [ "$(printf '%s' "$entry" | jq -r '.name? | type' 2>/dev/null)" != "string" ] \
+						|| [ -z "$ename" ]; then
+						echo "Error: $file: $key[$j] needs a non-empty string \"name\"" >&2
+						rc=2
+						continue
+					fi
+					if [ "$(printf '%s' "$entry" | jq -r '.launch? | type' 2>/dev/null)" != "string" ] \
+						|| [ -z "$(printf '%s' "$entry" | jq -r '.launch? // empty' 2>/dev/null)" ]; then
+						echo "Error: $file: $key[$j] (\"$ename\") needs a non-empty string \"launch\"" >&2
+						rc=2
+						continue
+					fi
+					extra=$(printf '%s' "$entry" | jq -r 'keys - ["name", "launch"] | join(", ")' 2>/dev/null)
+					if [ -n "$extra" ]; then
+						echo "Warning: $file: $key[$j] (\"$ename\") sets keys prel does not read: $extra" >&2
+						[ "$rc" = "0" ] && rc=1
+					fi
+				done
+				# Two commands of one name would make 'prel run <name>' pick
+				# between them, so a duplicated name is refused outright.
+				local dup
+				while IFS= read -r dup; do
+					[ -n "$dup" ] || continue
+					echo "Error: $file: the command name \"$dup\" is given more than once" >&2
+					rc=2
+				done < <(printf '%s' "$json" | jq -r --arg k "$key" \
+					'.[$k] | [.[].name? // empty] | group_by(.) | .[] | select(length > 1) | .[0]' 2>/dev/null)
+				continue
+			fi
+
 			case "$type:$actual" in
 				*:absent|text:string|list:array|list:string) ;;
 				text:*)
@@ -251,7 +335,10 @@ Description:
       "releaseBuildCommand": "packaging/build-deb.sh ${version}",
       "artifacts": ["build/prel_${version}_all.deb"],
       "plansDir": "docs/plans",
-      "publicReleasesRepository": "acme/myapp-releases"
+      "publicReleasesRepository": "acme/myapp-releases",
+      "commands": [
+        { "name": "deb", "launch": "packaging/build-deb.sh ${version}" }
+      ]
     }
 
   Every key is optional and the file itself is optional; a repository with
@@ -271,6 +358,10 @@ Description:
                          'prel public-release' publishes a release on: the
                          same version file, tag, release and artifacts there
                          (none)
+    commands             a list of named commands, each an object with a
+                         "name" and the "launch" shell command 'prel run
+                         <name> [args...]' runs, with the remaining args
+                         appended to it (none)
 
   The two build commands are read one by its own command and never the other:
   'prel build' runs buildCommand, a release runs releaseBuildCommand, and a
@@ -326,6 +417,21 @@ USAGE
 		key="${_PREL_CONFIG_KEYS[$i]}"
 		type="${_PREL_CONFIG_TYPES[$i]}"
 		default="${_PREL_CONFIG_DEFAULTS[$i]}"
+		if [ "$type" = "commands" ]; then
+			local -a entries=()
+			if mapfile -t entries < <(_prel_config_commands) && [ ${#entries[@]} -gt 0 ]; then
+				printf '%-21s %d named command(s):\n' "$key:" "${#entries[@]}"
+				local entry cname claunch
+				for entry in "${entries[@]}"; do
+					cname="${entry%%$'\t'*}"
+					claunch="${entry#*$'\t'}"
+					printf '%-21s %s -> %s\n' "" "$cname" "$claunch"
+				done
+			else
+				printf '%-21s %s\n' "$key:" "none (default)"
+			fi
+			continue
+		fi
 		if [ "$type" = "list" ]; then
 			if mapfile -t list < <(_prel_config_list "$key") && [ ${#list[@]} -gt 0 ]; then
 				printf '%-21s %s\n' "$key:" "$(_prel_list_line "${list[@]}")"

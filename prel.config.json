@@ -1,4 +1,7 @@
 {
   "releaseBuildCommand": "packaging/build-deb.sh ${version}",
-  "artifacts": ["build/prel_${version}_all.deb"]
+  "artifacts": ["build/prel_${version}_all.deb"],
+  "commands": [
+    { "name": "deb", "launch": "packaging/build-deb.sh ${version}" }
+  ]
 }
